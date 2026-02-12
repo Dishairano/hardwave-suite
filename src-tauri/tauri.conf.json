@@ -50,9 +50,9 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://hardwavestudios.com/api/updates/{{target}}/{{arch}}/{{current_version}}"
+        "https://github.com/Dishairano/hardwave-suite/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI0NEZFMUUwRENDNkFCQzUKUldURnE4YmM0T0ZQSkdRbm5HMmd3SGFpOGRZdHR6ZWFSSWtFMmdBbXIxekxBcXRyUUtyUGg4STAK"
+      "pubkey": ""
     }
   }
 }
