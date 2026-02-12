@@ -59,6 +59,21 @@ export function HubView({
 }: HubViewProps) {
   const [tipIndex, setTipIndex] = useState(() => Math.floor(Math.random() * proTips.length))
   const [sessionTime, setSessionTime] = useState(0)
+  const [appVersion, setAppVersion] = useState('0.0.0')
+
+  // Fetch app version from Tauri
+  useEffect(() => {
+    const getVersion = async () => {
+      try {
+        const { getVersion } = await import('@tauri-apps/api/app')
+        const version = await getVersion()
+        setAppVersion(version)
+      } catch {
+        setAppVersion('0.4.0') // Fallback
+      }
+    }
+    getVersion()
+  }, [])
 
   const greeting = getGreeting()
   const displayName = user?.displayName || user?.email?.split('@')[0] || 'Producer'
@@ -93,7 +108,7 @@ export function HubView({
               <span className="text-base font-bold text-white">Hardwave Suite</span>
               <div className="flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-[10px] text-zinc-500">Engine Ready v2.4.1</span>
+                <span className="text-[10px] text-zinc-500">Engine Ready v{appVersion}</span>
               </div>
             </div>
           </div>

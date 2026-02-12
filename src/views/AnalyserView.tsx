@@ -12,14 +12,17 @@ import {
   Radio,
   Check,
   Mic,
-  ChevronDown
+  ChevronDown,
+  Plug,
 } from 'lucide-react'
+import { useVstAudio } from '../hooks/useVstAudio'
 
 // Types
 type ResponseTime = 'fast' | 'medium' | 'slow'
 type TiltMode = 'off' | '-3dB' | '-4.5dB'
 type WeightingMode = 'flat' | 'dBA' | 'dBC'
 type SpectrumMode = 'peak' | 'rms'
+type AudioSource = 'mic' | 'vst'
 
 interface AnalyserState {
   spectrumMode: SpectrumMode
@@ -28,6 +31,7 @@ interface AnalyserState {
   weightingMode: WeightingMode
   frozen: boolean
   peakHold: boolean
+  audioSource: AudioSource
 }
 
 interface AnalyserViewProps {
@@ -71,8 +75,12 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
     tiltMode: 'off',
     weightingMode: 'flat',
     frozen: false,
-    peakHold: true
+    peakHold: true,
+    audioSource: 'mic'
   })
+
+  // VST audio hook
+  const [vstState, vstActions] = useVstAudio(50, false)
 
   const [isRunning, setIsRunning] = useState(false)
   const [hasAudioPermission, setHasAudioPermission] = useState(false)
@@ -221,10 +229,30 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
   // Switch to a different audio device
   const switchDevice = useCallback(async (deviceId: string) => {
     setSelectedDeviceId(deviceId)
-    if (isRunning) {
+    if (isRunning && state.audioSource === 'mic') {
       await initAudio(deviceId)
     }
-  }, [isRunning, initAudio])
+  }, [isRunning, initAudio, state.audioSource])
+
+  // Switch audio source (mic or vst)
+  const switchAudioSource = useCallback(async (source: AudioSource) => {
+    setState(s => ({ ...s, audioSource: source }))
+
+    if (source === 'vst') {
+      // Stop mic if running
+      stopAudio()
+      // Start VST server if not running
+      if (!vstState.serverRunning) {
+        await vstActions.startServer()
+      }
+      setIsRunning(true)
+    } else {
+      // Switch back to mic
+      if (selectedDeviceId) {
+        await initAudio(selectedDeviceId)
+      }
+    }
+  }, [stopAudio, vstState.serverRunning, vstActions, selectedDeviceId, initAudio])
 
   // Load devices on mount
   useEffect(() => {
@@ -303,9 +331,101 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
     }
   }, [state.weightingMode])
 
-  // Animation loop
+  // VST data animation loop
   useEffect(() => {
-    if (!isRunning || state.frozen) return
+    if (!isRunning || state.frozen || state.audioSource !== 'vst') return
+    if (!vstState.vstConnected || !vstState.audioData) return
+
+    const draw = () => {
+      if (!isRunning || state.frozen || state.audioSource !== 'vst') return
+      if (!vstState.audioData) return
+
+      const smoothing = getSmoothingFactor()
+      const data = vstState.audioData
+
+      // Update spectrum data from VST
+      for (let i = 0; i < NUM_BANDS && i < data.left_bands.length; i++) {
+        // Average left and right or use peak depending on mode
+        let bandValue: number
+        if (state.spectrumMode === 'peak') {
+          bandValue = Math.max(data.left_bands[i], data.right_bands[i])
+        } else {
+          bandValue = (data.left_bands[i] + data.right_bands[i]) / 2
+        }
+
+        // Apply tilt and weighting
+        const centerFreq = getBandFrequency(i)
+        bandValue = applyTilt(bandValue, centerFreq)
+        bandValue = applyWeighting(bandValue, centerFreq)
+
+        // Smooth spectrum data
+        spectrumDataRef.current[i] = spectrumDataRef.current[i] * smoothing + bandValue * (1 - smoothing)
+
+        // Update peak hold
+        if (state.peakHold) {
+          if (spectrumDataRef.current[i] > spectrumPeakRef.current[i]) {
+            spectrumPeakRef.current[i] = spectrumDataRef.current[i]
+            peakDecayRef.current[i] = 0
+          } else {
+            peakDecayRef.current[i]++
+            if (peakDecayRef.current[i] > 60) {
+              spectrumPeakRef.current[i] -= 0.5
+            }
+          }
+        }
+      }
+
+      // Update levels from VST
+      leftPeakRef.current = Math.max(leftPeakRef.current * 0.95, data.left_peak)
+      rightPeakRef.current = Math.max(rightPeakRef.current * 0.95, data.right_peak)
+      leftRmsRef.current = leftRmsRef.current * smoothing + data.left_rms * (1 - smoothing)
+      rightRmsRef.current = rightRmsRef.current * smoothing + data.right_rms * (1 - smoothing)
+
+      // Peak hold
+      if (state.peakHold) {
+        leftPeakHoldRef.current = Math.max(leftPeakHoldRef.current, data.left_peak)
+        rightPeakHoldRef.current = Math.max(rightPeakHoldRef.current, data.right_peak)
+      }
+
+      // Clip detection
+      if (data.left_peak > -0.1) clipLeftRef.current = true
+      if (data.right_peak > -0.1) clipRightRef.current = true
+
+      // Calculate phase correlation from stereo data (simplified)
+      // Use the difference between left and right RMS as a proxy
+      const totalRms = data.left_rms + data.right_rms
+      if (totalRms > 0.001) {
+        const diff = Math.abs(data.left_rms - data.right_rms) / totalRms
+        phaseCorrelationRef.current = 1 - diff  // Higher = more correlated
+      }
+
+      // Stereo width
+      if (totalRms > 0.001) {
+        stereoWidthRef.current = Math.abs(data.left_rms - data.right_rms) / totalRms
+      }
+
+      // Draw all canvases
+      drawSpectrum()
+      drawPhase()
+      drawStereo()
+      drawPeakMeters()
+
+      animationRef.current = requestAnimationFrame(draw)
+    }
+
+    animationRef.current = requestAnimationFrame(draw)
+
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current)
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRunning, state.frozen, state.audioSource, state.spectrumMode, state.peakHold, vstState.vstConnected, vstState.audioData, getSmoothingFactor, getBandFrequency, applyTilt, applyWeighting])
+
+  // Mic animation loop
+  useEffect(() => {
+    if (!isRunning || state.frozen || state.audioSource !== 'mic') return
 
     const analyserLeft = analyserLeftRef.current
     const analyserRight = analyserRightRef.current
@@ -323,7 +443,7 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
     analyserRight.smoothingTimeConstant = smoothing
 
     const draw = () => {
-      if (!isRunning || state.frozen) return
+      if (!isRunning || state.frozen || state.audioSource !== 'mic') return
 
       // Get frequency data
       analyserLeft.getFloatFrequencyData(leftFreqData)
@@ -452,7 +572,7 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
         cancelAnimationFrame(animationRef.current)
       }
     }
-  }, [isRunning, state.frozen, state.spectrumMode, state.peakHold, getSmoothingFactor, getBandFrequency, freqToBin, applyTilt, applyWeighting])
+  }, [isRunning, state.frozen, state.audioSource, state.spectrumMode, state.peakHold, getSmoothingFactor, getBandFrequency, freqToBin, applyTilt, applyWeighting])
 
   // Draw spectrum analyzer
   const drawSpectrum = useCallback(() => {
@@ -813,63 +933,105 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
 
         {/* Controls */}
         <div className="flex items-center gap-2 no-drag">
-          {/* Audio Input Selector */}
-          <div className="relative">
+          {/* Audio Source Toggle */}
+          <div className="flex rounded-lg overflow-hidden border border-[#27272a]">
             <button
-              onClick={() => setShowDeviceSelector(!showDeviceSelector)}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 bg-[#18181b] text-zinc-300 hover:bg-[#27272a] hover:text-white transition-all max-w-[200px]"
+              onClick={() => switchAudioSource('mic')}
+              className={`px-3 py-1.5 text-xs font-medium flex items-center gap-1.5 transition-all ${
+                state.audioSource === 'mic'
+                  ? 'bg-cyan-500/20 text-cyan-400'
+                  : 'text-zinc-500 hover:text-zinc-300'
+              }`}
             >
-              <Mic className="w-3 h-3 flex-shrink-0" />
-              <span className="truncate">
-                {audioDevices.find(d => d.deviceId === selectedDeviceId)?.label || 'Select Input'}
-              </span>
-              <ChevronDown className="w-3 h-3 flex-shrink-0" />
+              <Mic className="w-3 h-3" />
+              Mic
             </button>
-
-            {showDeviceSelector && (
-              <div className="absolute top-full left-0 mt-1 w-72 bg-[#18181b] border border-[#27272a] rounded-lg shadow-xl z-50 py-1 max-h-64 overflow-y-auto">
-                <div className="px-3 py-2 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider border-b border-[#27272a]">
-                  Audio Input Device
-                </div>
-                {audioDevices.length === 0 ? (
-                  <div className="px-3 py-2 text-xs text-zinc-500">No devices found</div>
-                ) : (
-                  audioDevices.map(device => (
-                    <button
-                      key={device.deviceId}
-                      onClick={() => {
-                        switchDevice(device.deviceId)
-                        setShowDeviceSelector(false)
-                      }}
-                      className={`w-full px-3 py-2 text-left text-xs flex items-center gap-2 hover:bg-[#27272a] transition-colors ${
-                        selectedDeviceId === device.deviceId ? 'text-cyan-400' : 'text-zinc-300'
-                      }`}
-                    >
-                      <Mic className="w-3 h-3 flex-shrink-0" />
-                      <span className="truncate">{device.label || `Device ${device.deviceId.slice(0, 8)}`}</span>
-                      {selectedDeviceId === device.deviceId && <Check className="w-3 h-3 ml-auto flex-shrink-0" />}
-                    </button>
-                  ))
-                )}
-                <div className="px-3 py-2 text-[10px] text-zinc-600 border-t border-[#27272a] mt-1">
-                  Tip: Use a virtual audio cable to capture DAW output
-                </div>
-              </div>
-            )}
+            <button
+              onClick={() => switchAudioSource('vst')}
+              className={`px-3 py-1.5 text-xs font-medium flex items-center gap-1.5 transition-all ${
+                state.audioSource === 'vst'
+                  ? 'bg-purple-500/20 text-purple-400'
+                  : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+            >
+              <Plug className="w-3 h-3" />
+              VST
+            </button>
           </div>
 
-          {/* Play/Stop */}
-          <button
-            onClick={() => isRunning ? stopAudio() : initAudio(selectedDeviceId)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all ${
-              isRunning
-                ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
-                : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
-            }`}
-          >
-            {isRunning ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-            {isRunning ? 'Stop' : 'Start'}
-          </button>
+          {/* VST Connection Status */}
+          {state.audioSource === 'vst' && (
+            <div className={`px-2 py-1 rounded-lg text-[10px] font-medium flex items-center gap-1.5 ${
+              vstState.vstConnected
+                ? 'bg-green-500/20 text-green-400'
+                : 'bg-zinc-800 text-zinc-500'
+            }`}>
+              <div className={`w-1.5 h-1.5 rounded-full ${vstState.vstConnected ? 'bg-green-400 animate-pulse' : 'bg-zinc-600'}`} />
+              {vstState.vstConnected ? 'VST Connected' : 'Waiting for VST...'}
+            </div>
+          )}
+
+          {/* Audio Input Selector (only show for mic mode) */}
+          {state.audioSource === 'mic' && (
+            <div className="relative">
+              <button
+                onClick={() => setShowDeviceSelector(!showDeviceSelector)}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 bg-[#18181b] text-zinc-300 hover:bg-[#27272a] hover:text-white transition-all max-w-[200px]"
+              >
+                <Mic className="w-3 h-3 flex-shrink-0" />
+                <span className="truncate">
+                  {audioDevices.find(d => d.deviceId === selectedDeviceId)?.label || 'Select Input'}
+                </span>
+                <ChevronDown className="w-3 h-3 flex-shrink-0" />
+              </button>
+
+              {showDeviceSelector && (
+                <div className="absolute top-full left-0 mt-1 w-72 bg-[#18181b] border border-[#27272a] rounded-lg shadow-xl z-50 py-1 max-h-64 overflow-y-auto">
+                  <div className="px-3 py-2 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider border-b border-[#27272a]">
+                    Audio Input Device
+                  </div>
+                  {audioDevices.length === 0 ? (
+                    <div className="px-3 py-2 text-xs text-zinc-500">No devices found</div>
+                  ) : (
+                    audioDevices.map(device => (
+                      <button
+                        key={device.deviceId}
+                        onClick={() => {
+                          switchDevice(device.deviceId)
+                          setShowDeviceSelector(false)
+                        }}
+                        className={`w-full px-3 py-2 text-left text-xs flex items-center gap-2 hover:bg-[#27272a] transition-colors ${
+                          selectedDeviceId === device.deviceId ? 'text-cyan-400' : 'text-zinc-300'
+                        }`}
+                      >
+                        <Mic className="w-3 h-3 flex-shrink-0" />
+                        <span className="truncate">{device.label || `Device ${device.deviceId.slice(0, 8)}`}</span>
+                        {selectedDeviceId === device.deviceId && <Check className="w-3 h-3 ml-auto flex-shrink-0" />}
+                      </button>
+                    ))
+                  )}
+                  <div className="px-3 py-2 text-[10px] text-zinc-600 border-t border-[#27272a] mt-1">
+                    Tip: Use a virtual audio cable to capture DAW output
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Play/Stop (only for mic mode) */}
+          {state.audioSource === 'mic' && (
+            <button
+              onClick={() => isRunning ? stopAudio() : initAudio(selectedDeviceId)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all ${
+                isRunning
+                  ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                  : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+              }`}
+            >
+              {isRunning ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+              {isRunning ? 'Stop' : 'Start'}
+            </button>
+          )}
 
           {/* Freeze */}
           <button
@@ -1058,6 +1220,34 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
               Select your audio input and click Start to analyze your mix in real-time.
             </p>
 
+            {/* Audio Source Toggle */}
+            <div className="mb-4">
+              <div className="flex rounded-xl overflow-hidden border border-[#27272a]">
+                <button
+                  onClick={() => setState(s => ({ ...s, audioSource: 'mic' }))}
+                  className={`flex-1 px-4 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-all ${
+                    state.audioSource === 'mic'
+                      ? 'bg-cyan-500/20 text-cyan-400'
+                      : 'text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  <Mic className="w-4 h-4" />
+                  Microphone
+                </button>
+                <button
+                  onClick={() => switchAudioSource('vst')}
+                  className={`flex-1 px-4 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-all ${
+                    state.audioSource === 'vst'
+                      ? 'bg-purple-500/20 text-purple-400'
+                      : 'text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  <Plug className="w-4 h-4" />
+                  VST Plugin
+                </button>
+              </div>
+            </div>
+
             {/* Device Selector in Prompt */}
             <div className="mb-6">
               <label className="block text-xs font-medium text-zinc-500 mb-2 text-left">Audio Input Device</label>
@@ -1108,6 +1298,49 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
               className="w-full px-6 py-3 rounded-xl bg-gradient-to-r from-orange-500 to-green-500 text-white font-semibold hover:shadow-lg hover:shadow-orange-500/25 transition-all"
             >
               Start Analyser
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* VST waiting prompt */}
+      {state.audioSource === 'vst' && !vstState.vstConnected && (
+        <div className="absolute inset-0 bg-black/80 flex items-center justify-center">
+          <div className="bg-[#111113] rounded-2xl border border-[#27272a] p-8 max-w-md text-center">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center mx-auto mb-4">
+              <Plug className="w-8 h-8 text-white" />
+            </div>
+            <h2 className="text-xl font-bold text-white mb-2">Waiting for VST</h2>
+            <p className="text-zinc-400 text-sm mb-6">
+              Add the <span className="text-purple-400 font-semibold">Hardwave Bridge</span> plugin to your DAW's master channel to stream audio.
+            </p>
+
+            {/* Connection Status */}
+            <div className="bg-[#18181b] rounded-xl border border-[#27272a] p-4 mb-6">
+              <div className="flex items-center justify-center gap-3">
+                <div className="w-3 h-3 rounded-full bg-zinc-600 animate-pulse" />
+                <span className="text-sm text-zinc-400">Listening on port 9847...</span>
+              </div>
+            </div>
+
+            {/* Instructions */}
+            <div className="text-left mb-6 space-y-2">
+              <p className="text-xs text-zinc-500">Setup instructions:</p>
+              <ol className="text-xs text-zinc-400 space-y-1 list-decimal list-inside">
+                <li>Build the VST: <code className="text-cyan-400 bg-zinc-900 px-1 rounded">cargo xtask bundle hardwave-bridge</code></li>
+                <li>Copy to your VST3 folder</li>
+                <li>Add Hardwave Bridge to master channel</li>
+                <li>Connection will be automatic</li>
+              </ol>
+            </div>
+
+            {/* Switch to Mic */}
+            <button
+              onClick={() => switchAudioSource('mic')}
+              className="w-full px-6 py-3 rounded-xl border border-[#27272a] text-zinc-400 font-medium hover:bg-[#18181b] transition-all flex items-center justify-center gap-2"
+            >
+              <Mic className="w-4 h-4" />
+              Use Microphone Instead
             </button>
           </div>
         </div>

@@ -2,15 +2,21 @@ mod db;
 mod scanner;
 mod api;
 mod models;
+mod websocket;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::State;
 use db::Database;
 use models::*;
+use websocket::{AudioState, WebSocketServer};
+use websocket::protocol::VstAudioData;
 
 pub struct AppState {
     db: Mutex<Database>,
     api_token: Mutex<Option<String>>,
+    // VST Bridge WebSocket
+    vst_audio_state: Arc<AudioState>,
+    vst_server: Mutex<Option<WebSocketServer>>,
 }
 
 // ==================== AUTH COMMANDS ====================
@@ -227,6 +233,63 @@ async fn get_stats(state: State<'_, AppState>) -> Result<Stats, String> {
     db.get_stats().map_err(|e| e.to_string())
 }
 
+// ==================== VST BRIDGE COMMANDS ====================
+
+#[tauri::command]
+async fn start_websocket_server(port: Option<u16>, state: State<'_, AppState>) -> Result<(), String> {
+    let port = port.unwrap_or(9847);
+
+    // Check if already running
+    {
+        let server_guard = state.vst_server.lock().map_err(|e| e.to_string())?;
+        if let Some(ref server) = *server_guard {
+            if server.is_running() {
+                return Ok(()); // Already running
+            }
+        }
+    }
+
+    // Create and start new server
+    let server = WebSocketServer::new(Arc::clone(&state.vst_audio_state));
+    server.start(port).await?;
+
+    // Store server
+    let mut server_guard = state.vst_server.lock().map_err(|e| e.to_string())?;
+    *server_guard = Some(server);
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn stop_websocket_server(state: State<'_, AppState>) -> Result<(), String> {
+    let mut server_guard = state.vst_server.lock().map_err(|e| e.to_string())?;
+    if let Some(ref server) = *server_guard {
+        server.stop();
+    }
+    *server_guard = None;
+    Ok(())
+}
+
+#[tauri::command]
+async fn is_vst_connected(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.vst_audio_state.is_connected())
+}
+
+#[tauri::command]
+async fn get_vst_audio_data(state: State<'_, AppState>) -> Result<VstAudioData, String> {
+    Ok(state.vst_audio_state.get_audio_data())
+}
+
+#[tauri::command]
+async fn is_websocket_server_running(state: State<'_, AppState>) -> Result<bool, String> {
+    let server_guard = state.vst_server.lock().map_err(|e| e.to_string())?;
+    if let Some(ref server) = *server_guard {
+        Ok(server.is_running())
+    } else {
+        Ok(false)
+    }
+}
+
 // ==================== APP ENTRY ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -256,6 +319,8 @@ pub fn run() {
         .manage(AppState {
             db: Mutex::new(db),
             api_token: Mutex::new(None),
+            vst_audio_state: Arc::new(AudioState::new()),
+            vst_server: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             // Auth
@@ -290,6 +355,12 @@ pub fn run() {
             get_collection_files,
             // Stats
             get_stats,
+            // VST Bridge
+            start_websocket_server,
+            stop_websocket_server,
+            is_vst_connected,
+            get_vst_audio_data,
+            is_websocket_server_running,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

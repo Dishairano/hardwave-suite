@@ -234,6 +234,7 @@ function App() {
             user={auth.user}
             onLogout={logout}
             onCheckUpdates={checkUpdates}
+            onBack={() => setCurrentTool('hub')}
           />
         )
       case 'organizer':

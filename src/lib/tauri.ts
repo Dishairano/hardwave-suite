@@ -7,17 +7,13 @@ const isTauri = typeof window !== 'undefined' && '__TAURI__' in window
 // Tauri API types
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>
 type OpenFn = (options: unknown) => Promise<unknown>
-type CheckFn = () => Promise<{ available: boolean; version: string; downloadAndInstall: () => Promise<void> } | null>
-
 // Dynamic imports for Tauri APIs (only when in Tauri)
 let invoke: InvokeFn | null = null
 let open: OpenFn | null = null
-let check: CheckFn | null = null
 
 if (isTauri) {
   import('@tauri-apps/api/core').then(m => { invoke = m.invoke as InvokeFn })
   import('@tauri-apps/plugin-dialog').then(m => { open = m.open as OpenFn })
-  import('@tauri-apps/plugin-updater').then(m => { check = m.check as CheckFn })
 }
 
 // Browser mock data for UI preview
@@ -639,18 +635,50 @@ interface UpdateProgress {
   total: number
 }
 
+// Store update state and callbacks
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let pendingUpdate: any = null
+let updateCallbacks: {
+  onChecking: (() => void)[]
+  onAvailable: ((info: UpdateInfo) => void)[]
+  onNotAvailable: (() => void)[]
+  onProgress: ((progress: UpdateProgress) => void)[]
+  onDownloaded: ((info: UpdateInfo) => void)[]
+  onError: ((error: { message: string }) => void)[]
+} = {
+  onChecking: [],
+  onAvailable: [],
+  onNotAvailable: [],
+  onProgress: [],
+  onDownloaded: [],
+  onError: [],
+}
+
 // Updates API
 export const updates = {
   async check(): Promise<void> {
-    if (!isTauri || !check) return
+    if (!isTauri) return
+
+    // Notify checking
+    updateCallbacks.onChecking.forEach(cb => cb())
 
     try {
-      const update = await check()
-      if (update?.available) {
-        console.log('Update available:', update.version)
+      // Dynamic import to avoid SSR issues
+      const { check: checkUpdate } = await import('@tauri-apps/plugin-updater')
+      const update = await checkUpdate()
+
+      if (update) {
+        pendingUpdate = update
+        updateCallbacks.onAvailable.forEach(cb => cb({
+          version: update.version,
+          releaseNotes: update.body || undefined,
+        }))
+      } else {
+        updateCallbacks.onNotAvailable.forEach(cb => cb())
       }
     } catch (error) {
       console.error('Error checking for updates:', error)
+      updateCallbacks.onError.forEach(cb => cb({ message: String(error) }))
     }
   },
 
@@ -659,44 +687,90 @@ export const updates = {
   },
 
   async download(): Promise<void> {
-    if (!isTauri || !check) return
+    if (!isTauri || !pendingUpdate) return
 
     try {
-      const update = await check()
-      if (update?.available) {
-        await update.downloadAndInstall()
-      }
+      let contentLength = 0
+      let downloaded = 0
+      await pendingUpdate.downloadAndInstall((event: { event: string; data: { contentLength?: number; chunkLength?: number } }) => {
+        // Handle DownloadEvent from Tauri updater
+        if (event.event === 'Started') {
+          contentLength = event.data.contentLength || 0
+        } else if (event.event === 'Progress') {
+          downloaded += event.data.chunkLength || 0
+          const percent = contentLength > 0 ? Math.round((downloaded / contentLength) * 100) : 0
+          updateCallbacks.onProgress.forEach(cb => cb({
+            percent,
+            bytesPerSecond: 0,
+            transferred: downloaded,
+            total: contentLength,
+          }))
+        } else if (event.event === 'Finished') {
+          updateCallbacks.onProgress.forEach(cb => cb({
+            percent: 100,
+            bytesPerSecond: 0,
+            transferred: contentLength,
+            total: contentLength,
+          }))
+        }
+      })
+
+      // Download complete
+      updateCallbacks.onDownloaded.forEach(cb => cb({
+        version: pendingUpdate?.version || '',
+      }))
     } catch (error) {
       console.error('Error downloading update:', error)
+      updateCallbacks.onError.forEach(cb => cb({ message: String(error) }))
     }
   },
 
   async install(): Promise<void> {
+    // In Tauri 2, downloadAndInstall handles both
+    // After download completes, app will restart automatically
     await this.download()
   },
 
-  onChecking(_callback: () => void): () => void {
-    return () => {}
+  onChecking(callback: () => void): () => void {
+    updateCallbacks.onChecking.push(callback)
+    return () => {
+      updateCallbacks.onChecking = updateCallbacks.onChecking.filter(cb => cb !== callback)
+    }
   },
 
-  onAvailable(_callback: (info: UpdateInfo) => void): () => void {
-    return () => {}
+  onAvailable(callback: (info: UpdateInfo) => void): () => void {
+    updateCallbacks.onAvailable.push(callback)
+    return () => {
+      updateCallbacks.onAvailable = updateCallbacks.onAvailable.filter(cb => cb !== callback)
+    }
   },
 
-  onNotAvailable(_callback: () => void): () => void {
-    return () => {}
+  onNotAvailable(callback: () => void): () => void {
+    updateCallbacks.onNotAvailable.push(callback)
+    return () => {
+      updateCallbacks.onNotAvailable = updateCallbacks.onNotAvailable.filter(cb => cb !== callback)
+    }
   },
 
-  onProgress(_callback: (progress: UpdateProgress) => void): () => void {
-    return () => {}
+  onProgress(callback: (progress: UpdateProgress) => void): () => void {
+    updateCallbacks.onProgress.push(callback)
+    return () => {
+      updateCallbacks.onProgress = updateCallbacks.onProgress.filter(cb => cb !== callback)
+    }
   },
 
-  onDownloaded(_callback: (info: UpdateInfo) => void): () => void {
-    return () => {}
+  onDownloaded(callback: (info: UpdateInfo) => void): () => void {
+    updateCallbacks.onDownloaded.push(callback)
+    return () => {
+      updateCallbacks.onDownloaded = updateCallbacks.onDownloaded.filter(cb => cb !== callback)
+    }
   },
 
-  onError(_callback: (error: { message: string }) => void): () => void {
-    return () => {}
+  onError(callback: (error: { message: string }) => void): () => void {
+    updateCallbacks.onError.push(callback)
+    return () => {
+      updateCallbacks.onError = updateCallbacks.onError.filter(cb => cb !== callback)
+    }
   },
 }
 
