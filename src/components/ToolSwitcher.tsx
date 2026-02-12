@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-export type Tool = 'hub' | 'organizer' | 'kickforge' | 'settings'
+export type Tool = 'hub' | 'organizer' | 'kickforge' | 'analyser' | 'settings'
 
 interface ToolSwitcherProps {
   currentTool: Tool

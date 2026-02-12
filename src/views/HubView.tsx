@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react'
-import { open } from '@tauri-apps/plugin-shell'
 import {
   Music,
   Folder,
@@ -15,6 +14,7 @@ import {
   Keyboard,
   Volume2
 } from 'lucide-react'
+import type { File } from '../types'
 
 const proTips = [
   { title: 'Phase Correlation', text: 'Keep your phase meter above 0 for mono compatibility. Below -0.5 means phase issues!' },
@@ -35,13 +35,27 @@ const shortcuts = [
 interface HubViewProps {
   user: { email: string; displayName: string | null } | null
   stats: { totalFiles: number; totalTags: number; totalCollections: number; totalFavorites: number }
+  recentFiles: File[]
+  onNavigateOrganizer: () => void
+  onNavigateKickforge: () => void
+  onNavigateAnalyser: () => void
   onNavigateSettings: () => void
+  onImportFolder: () => void
+  onCreateTag: () => void
+  onCreateCollection: () => void
 }
 
 export function HubView({
   user,
   stats,
+  recentFiles: _recentFiles,
+  onNavigateOrganizer: _onNavigateOrganizer,
+  onNavigateKickforge: _onNavigateKickforge,
+  onNavigateAnalyser,
   onNavigateSettings,
+  onImportFolder: _onImportFolder,
+  onCreateTag: _onCreateTag,
+  onCreateCollection: _onCreateCollection,
 }: HubViewProps) {
   const [tipIndex, setTipIndex] = useState(() => Math.floor(Math.random() * proTips.length))
   const [sessionTime, setSessionTime] = useState(0)
@@ -130,13 +144,13 @@ export function HubView({
                 icon={<Activity className="w-7 h-7" />}
                 stat="Audio analysis tool"
                 gradient="from-orange-500 to-green-500"
-                onClick={() => open('https://github.com/Dishairano/hardwave-suite/releases')}
+                onClick={onNavigateAnalyser}
               />
             </div>
 
             {/* Quick Actions */}
             <div className="flex gap-3">
-              <ActionButton icon={<Activity className="w-4 h-4" />} label="Launch Analyser" primary onClick={() => open('https://github.com/Dishairano/hardwave-suite/releases')} />
+              <ActionButton icon={<Activity className="w-4 h-4" />} label="Launch Analyser" primary onClick={onNavigateAnalyser} />
               <ActionButton icon={<Settings className="w-4 h-4" />} label="Settings" onClick={onNavigateSettings} />
             </div>
 
