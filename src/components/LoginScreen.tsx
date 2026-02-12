@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from './Button'
 
 interface LoginScreenProps {
@@ -10,6 +10,18 @@ export function LoginScreen({ onLogin, error }: LoginScreenProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [appVersion, setAppVersion] = useState('dev')
+
+  useEffect(() => {
+    const loadVersion = async () => {
+      try {
+        setAppVersion(await window.electron.getVersion())
+      } catch {
+        setAppVersion('dev')
+      }
+    }
+    loadVersion()
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -123,7 +135,7 @@ export function LoginScreen({ onLogin, error }: LoginScreenProps) {
 
       {/* Version */}
       <p className="absolute bottom-4 text-text-tertiary text-xs">
-        v0.3.0
+        v{appVersion}
       </p>
     </div>
   )

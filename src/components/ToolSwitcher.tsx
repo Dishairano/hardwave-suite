@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 export type Tool = 'hub' | 'organizer' | 'kickforge' | 'analyser' | 'settings'
 
@@ -54,6 +54,18 @@ const tools = [
 
 export function ToolSwitcher({ currentTool, onToolChange }: ToolSwitcherProps) {
   const [isOpen, setIsOpen] = useState(false)
+  const [appVersion, setAppVersion] = useState('dev')
+
+  useEffect(() => {
+    const loadVersion = async () => {
+      try {
+        setAppVersion(await window.electron.getVersion())
+      } catch {
+        setAppVersion('dev')
+      }
+    }
+    loadVersion()
+  }, [])
 
   const currentToolData = tools.find((t) => t.id === currentTool)
 
@@ -132,7 +144,7 @@ export function ToolSwitcher({ currentTool, onToolChange }: ToolSwitcherProps) {
             {/* Footer */}
             <div className="border-t border-bg-hover p-3">
               <p className="text-xs text-text-tertiary text-center">
-                Hardwave Suite v0.3.0
+                Hardwave Suite v{appVersion}
               </p>
             </div>
           </div>

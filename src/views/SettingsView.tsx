@@ -25,7 +25,7 @@ interface SettingsViewProps {
     displayName: string | null
   } | null
   onLogout: () => void
-  onCheckUpdates: () => void
+  onCheckUpdates: () => void | Promise<void>
   onBack?: () => void
 }
 
@@ -39,6 +39,7 @@ export function SettingsView({ user, onLogout, onCheckUpdates, onBack }: Setting
   const [vstPort, setVstPort] = useState('9847')
   const [vstAutoStart, setVstAutoStart] = useState(true)
   const [vstConnected, setVstConnected] = useState(false)
+  const [appVersion, setAppVersion] = useState('0.0.0')
 
   // Update state
   const [updateState, setUpdateState] = useState<UpdateState>('idle')
@@ -49,6 +50,18 @@ export function SettingsView({ user, onLogout, onCheckUpdates, onBack }: Setting
   // Debug mode (hold Shift+Alt and click version 5 times)
   const [showDebug, setShowDebug] = useState(false)
   const debugClicksRef = useRef(0)
+
+  useEffect(() => {
+    const loadVersion = async () => {
+      try {
+        const { getVersion } = await import('@tauri-apps/api/app')
+        setAppVersion(await getVersion())
+      } catch {
+        setAppVersion('dev')
+      }
+    }
+    loadVersion()
+  }, [])
 
   // Simulate checking VST connection status
   useEffect(() => {
@@ -71,12 +84,10 @@ export function SettingsView({ user, onLogout, onCheckUpdates, onBack }: Setting
     setUpdateError('')
 
     try {
-      await onCheckUpdates()
+      await Promise.resolve(onCheckUpdates())
       // If no update found after real check, go back to idle
       setTimeout(() => {
-        if (updateState === 'checking') {
-          setUpdateState('idle')
-        }
+        setUpdateState(prev => (prev === 'checking' ? 'idle' : prev))
       }, 3000)
     } catch (err) {
       setUpdateState('error')
@@ -84,12 +95,22 @@ export function SettingsView({ user, onLogout, onCheckUpdates, onBack }: Setting
     }
   }
 
+  const getSimulatedNextVersion = useCallback(() => {
+    const versionParts = appVersion.match(/^(\d+)\.(\d+)\.(\d+)$/)
+    if (!versionParts) return '0.0.1'
+
+    const major = Number(versionParts[1])
+    const minor = Number(versionParts[2])
+    const patch = Number(versionParts[3]) + 1
+    return `${major}.${minor}.${patch}`
+  }, [appVersion])
+
   // Debug: Simulate finding an update
   const simulateUpdateAvailable = useCallback(() => {
     setUpdateState('available')
-    setUpdateVersion('0.5.0')
+    setUpdateVersion(getSimulatedNextVersion())
     setUpdateProgress(0)
-  }, [])
+  }, [getSimulatedNextVersion])
 
   // Debug: Simulate download with progress
   const simulateDownload = useCallback(() => {
@@ -470,7 +491,7 @@ export function SettingsView({ user, onLogout, onCheckUpdates, onBack }: Setting
                     onClick={handleVersionClick}
                     title="Shift+Alt+Click 5 times for debug mode"
                   >
-                    v0.4.0
+                    v{appVersion}
                   </span>
                   {updateState === 'idle' && (
                     <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[10px] font-medium">

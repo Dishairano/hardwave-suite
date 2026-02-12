@@ -69,7 +69,7 @@ export function HubView({
         const version = await getVersion()
         setAppVersion(version)
       } catch {
-        setAppVersion('0.4.0') // Fallback
+        setAppVersion('dev')
       }
     }
     getVersion()

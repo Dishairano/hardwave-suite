@@ -929,7 +929,15 @@ export const cloud = {
 
 // Export unified API that mimics window.electron
 export const tauri = {
-  getVersion: async () => '0.3.0',
+  getVersion: async () => {
+    if (!isTauri) return 'dev'
+    try {
+      const { getVersion } = await import('@tauri-apps/api/app')
+      return await getVersion()
+    } catch {
+      return 'unknown'
+    }
+  },
   getPlatform: async () => 'tauri',
   ping: async () => 'pong',
   auth,

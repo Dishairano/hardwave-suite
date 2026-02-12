@@ -115,6 +115,14 @@ jobs:
         run: |
           mkdir -p release-files
           find artifacts -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.dmg" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.tar.gz" -o -name "*.sig" -o -name "*.zip" \) -exec cp {} release-files/ \;
+          # Normalize spaces so release asset names and URLs are stable.
+          find release-files -maxdepth 1 -type f | while IFS= read -r file; do
+            base="$(basename "$file")"
+            normalized="${base// /.}"
+            if [ "$base" != "$normalized" ]; then
+              mv "$file" "release-files/$normalized"
+            fi
+          done
           ls -la release-files/
 
       - name: Get version
@@ -132,43 +140,79 @@ jobs:
 
       - name: Generate latest.json
         run: |
+          set -euo pipefail
+
           VERSION="${{ steps.pkg.outputs.version }}"
           TAG="${{ steps.version.outputs.tag }}"
           NOTES="Bug fixes and improvements"
           PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           BASE_URL="https://github.com/Dishairano/hardwave-suite/releases/download/${TAG}"
 
-          # Find signature files and read them
-          WIN_SIG=$(cat release-files/*.nsis.zip.sig 2>/dev/null || echo "")
-          MAC_SIG=$(cat release-files/*.app.tar.gz.sig 2>/dev/null || echo "")
-          LINUX_SIG=$(cat release-files/*.AppImage.tar.gz.sig 2>/dev/null || echo "")
-
-          # Get actual filenames
-          WIN_FILE=$(ls release-files/*.nsis.zip 2>/dev/null | xargs -r basename || echo "")
-          MAC_FILE=$(ls release-files/*.app.tar.gz 2>/dev/null | xargs -r basename || echo "")
-          LINUX_FILE=$(ls release-files/*.AppImage.tar.gz 2>/dev/null | xargs -r basename || echo "")
-
-          cat > latest.json << EOF
-          {
-            "version": "${VERSION}",
-            "notes": "${NOTES}",
-            "pub_date": "${PUB_DATE}",
-            "platforms": {
-              "windows-x86_64": {
-                "signature": "${WIN_SIG}",
-                "url": "${BASE_URL}/${WIN_FILE}"
-              },
-              "darwin-aarch64": {
-                "signature": "${MAC_SIG}",
-                "url": "${BASE_URL}/${MAC_FILE}"
-              },
-              "linux-x86_64": {
-                "signature": "${LINUX_SIG}",
-                "url": "${BASE_URL}/${LINUX_FILE}"
-              }
-            }
+          pick_file() {
+            local pattern="$1"
+            find release-files -maxdepth 1 -type f -iname "$pattern" -printf '%f\n' | sort | head -n 1
           }
-          EOF
+
+          read_sig() {
+            local file="$1"
+            if [ -z "$file" ] || [ ! -f "release-files/${file}.sig" ]; then
+              echo ""
+              return
+            fi
+            tr -d '\r\n' < "release-files/${file}.sig"
+          }
+
+          WIN_FILE="$(pick_file '*.nsis.zip')"
+          MAC_FILE="$(pick_file '*.app.tar.gz')"
+          LINUX_FILE="$(pick_file '*.AppImage.tar.gz')"
+
+          WIN_SIG="$(read_sig "$WIN_FILE")"
+          MAC_SIG="$(read_sig "$MAC_FILE")"
+          LINUX_SIG="$(read_sig "$LINUX_FILE")"
+
+          missing=0
+          for required in WIN_FILE MAC_FILE LINUX_FILE WIN_SIG MAC_SIG LINUX_SIG; do
+            if [ -z "${!required}" ]; then
+              echo "::error::Missing ${required} while generating latest.json"
+              missing=1
+            fi
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            echo "release-files contents:"
+            find release-files -maxdepth 1 -type f -printf '%f\n' | sort
+            exit 1
+          fi
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "$NOTES" \
+            --arg pub_date "$PUB_DATE" \
+            --arg win_sig "$WIN_SIG" \
+            --arg mac_sig "$MAC_SIG" \
+            --arg linux_sig "$LINUX_SIG" \
+            --arg win_url "${BASE_URL}/${WIN_FILE}" \
+            --arg mac_url "${BASE_URL}/${MAC_FILE}" \
+            --arg linux_url "${BASE_URL}/${LINUX_FILE}" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $pub_date,
+              platforms: {
+                "windows-x86_64": {
+                  signature: $win_sig,
+                  url: $win_url
+                },
+                "darwin-aarch64": {
+                  signature: $mac_sig,
+                  url: $mac_url
+                },
+                "linux-x86_64": {
+                  signature: $linux_sig,
+                  url: $linux_url
+                }
+              }
+            }' > latest.json
 
           echo "Generated latest.json:"
           cat latest.json
