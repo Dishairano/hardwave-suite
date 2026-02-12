@@ -10,7 +10,9 @@ import {
   Gauge,
   Activity,
   Radio,
-  Check
+  Check,
+  Mic,
+  ChevronDown
 } from 'lucide-react'
 
 // Types
@@ -75,6 +77,9 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
   const [isRunning, setIsRunning] = useState(false)
   const [hasAudioPermission, setHasAudioPermission] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([])
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
+  const [showDeviceSelector, setShowDeviceSelector] = useState(false)
 
   // Audio refs
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -115,16 +120,46 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
     }
   }, [state.responseTime])
 
-  // Initialize audio
-  const initAudio = useCallback(async () => {
+  // Enumerate audio input devices
+  const refreshDevices = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      // Request permission first to get device labels
+      await navigator.mediaDevices.getUserMedia({ audio: true })
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      const audioInputs = devices.filter(d => d.kind === 'audioinput')
+      setAudioDevices(audioInputs)
+
+      // Select first device if none selected
+      if (!selectedDeviceId && audioInputs.length > 0) {
+        setSelectedDeviceId(audioInputs[0].deviceId)
+      }
+    } catch (err) {
+      console.error('Failed to enumerate devices:', err)
+    }
+  }, [selectedDeviceId])
+
+  // Initialize audio with selected device
+  const initAudio = useCallback(async (deviceId?: string) => {
+    try {
+      // Stop any existing stream
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop())
+      }
+      if (audioContextRef.current) {
+        await audioContextRef.current.close()
+      }
+
+      const constraints: MediaStreamConstraints = {
         audio: {
+          deviceId: deviceId ? { exact: deviceId } : undefined,
           echoCancellation: false,
           noiseSuppression: false,
-          autoGainControl: false
+          autoGainControl: false,
+          channelCount: { ideal: 2 }
         }
-      })
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints)
 
       streamRef.current = stream
       setHasAudioPermission(true)
@@ -182,6 +217,27 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
 
     setIsRunning(false)
   }, [])
+
+  // Switch to a different audio device
+  const switchDevice = useCallback(async (deviceId: string) => {
+    setSelectedDeviceId(deviceId)
+    if (isRunning) {
+      await initAudio(deviceId)
+    }
+  }, [isRunning, initAudio])
+
+  // Load devices on mount
+  useEffect(() => {
+    refreshDevices()
+
+    // Listen for device changes
+    const handleDeviceChange = () => refreshDevices()
+    navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange)
+
+    return () => {
+      navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange)
+    }
+  }, [refreshDevices])
 
   // Reset all meters
   const resetMeters = useCallback(() => {
@@ -757,9 +813,54 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
 
         {/* Controls */}
         <div className="flex items-center gap-2 no-drag">
+          {/* Audio Input Selector */}
+          <div className="relative">
+            <button
+              onClick={() => setShowDeviceSelector(!showDeviceSelector)}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 bg-[#18181b] text-zinc-300 hover:bg-[#27272a] hover:text-white transition-all max-w-[200px]"
+            >
+              <Mic className="w-3 h-3 flex-shrink-0" />
+              <span className="truncate">
+                {audioDevices.find(d => d.deviceId === selectedDeviceId)?.label || 'Select Input'}
+              </span>
+              <ChevronDown className="w-3 h-3 flex-shrink-0" />
+            </button>
+
+            {showDeviceSelector && (
+              <div className="absolute top-full left-0 mt-1 w-72 bg-[#18181b] border border-[#27272a] rounded-lg shadow-xl z-50 py-1 max-h-64 overflow-y-auto">
+                <div className="px-3 py-2 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider border-b border-[#27272a]">
+                  Audio Input Device
+                </div>
+                {audioDevices.length === 0 ? (
+                  <div className="px-3 py-2 text-xs text-zinc-500">No devices found</div>
+                ) : (
+                  audioDevices.map(device => (
+                    <button
+                      key={device.deviceId}
+                      onClick={() => {
+                        switchDevice(device.deviceId)
+                        setShowDeviceSelector(false)
+                      }}
+                      className={`w-full px-3 py-2 text-left text-xs flex items-center gap-2 hover:bg-[#27272a] transition-colors ${
+                        selectedDeviceId === device.deviceId ? 'text-cyan-400' : 'text-zinc-300'
+                      }`}
+                    >
+                      <Mic className="w-3 h-3 flex-shrink-0" />
+                      <span className="truncate">{device.label || `Device ${device.deviceId.slice(0, 8)}`}</span>
+                      {selectedDeviceId === device.deviceId && <Check className="w-3 h-3 ml-auto flex-shrink-0" />}
+                    </button>
+                  ))
+                )}
+                <div className="px-3 py-2 text-[10px] text-zinc-600 border-t border-[#27272a] mt-1">
+                  Tip: Use a virtual audio cable to capture DAW output
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Play/Stop */}
           <button
-            onClick={isRunning ? stopAudio : initAudio}
+            onClick={() => isRunning ? stopAudio() : initAudio(selectedDeviceId)}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all ${
               isRunning
                 ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
@@ -953,12 +1054,58 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
               <Activity className="w-8 h-8 text-white" />
             </div>
             <h2 className="text-xl font-bold text-white mb-2">Start Analysing</h2>
-            <p className="text-zinc-400 text-sm mb-6">
-              Click Start to enable audio input. Route your DAW or audio interface output to analyze your mix in real-time.
+            <p className="text-zinc-400 text-sm mb-4">
+              Select your audio input and click Start to analyze your mix in real-time.
             </p>
+
+            {/* Device Selector in Prompt */}
+            <div className="mb-6">
+              <label className="block text-xs font-medium text-zinc-500 mb-2 text-left">Audio Input Device</label>
+              <div className="relative">
+                <button
+                  onClick={() => setShowDeviceSelector(!showDeviceSelector)}
+                  className="w-full px-4 py-3 rounded-xl bg-[#18181b] border border-[#27272a] text-left text-sm flex items-center gap-2 hover:border-[#3f3f46] transition-colors"
+                >
+                  <Mic className="w-4 h-4 text-zinc-400 flex-shrink-0" />
+                  <span className="flex-1 truncate text-zinc-300">
+                    {audioDevices.find(d => d.deviceId === selectedDeviceId)?.label || 'Select audio input...'}
+                  </span>
+                  <ChevronDown className={`w-4 h-4 text-zinc-500 transition-transform ${showDeviceSelector ? 'rotate-180' : ''}`} />
+                </button>
+
+                {showDeviceSelector && (
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-[#18181b] border border-[#27272a] rounded-xl shadow-xl z-50 py-1 max-h-48 overflow-y-auto">
+                    {audioDevices.length === 0 ? (
+                      <div className="px-4 py-3 text-sm text-zinc-500">No devices found. Click Start to grant permission.</div>
+                    ) : (
+                      audioDevices.map(device => (
+                        <button
+                          key={device.deviceId}
+                          onClick={() => {
+                            setSelectedDeviceId(device.deviceId)
+                            setShowDeviceSelector(false)
+                          }}
+                          className={`w-full px-4 py-2 text-left text-sm flex items-center gap-2 hover:bg-[#27272a] transition-colors ${
+                            selectedDeviceId === device.deviceId ? 'text-cyan-400' : 'text-zinc-300'
+                          }`}
+                        >
+                          <Mic className="w-3 h-3 flex-shrink-0" />
+                          <span className="truncate">{device.label || `Device ${device.deviceId.slice(0, 8)}`}</span>
+                          {selectedDeviceId === device.deviceId && <Check className="w-4 h-4 ml-auto flex-shrink-0" />}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+              <p className="mt-2 text-[10px] text-zinc-600 text-left">
+                Tip: Use VB-Cable (Windows) or BlackHole (macOS) to capture DAW output
+              </p>
+            </div>
+
             <button
-              onClick={initAudio}
-              className="px-6 py-3 rounded-xl bg-gradient-to-r from-orange-500 to-green-500 text-white font-semibold hover:shadow-lg hover:shadow-orange-500/25 transition-all"
+              onClick={() => initAudio(selectedDeviceId)}
+              className="w-full px-6 py-3 rounded-xl bg-gradient-to-r from-orange-500 to-green-500 text-white font-semibold hover:shadow-lg hover:shadow-orange-500/25 transition-all"
             >
               Start Analyser
             </button>
