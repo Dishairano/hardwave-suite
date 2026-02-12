@@ -108,8 +108,11 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: List artifacts
-        run: find artifacts -type f | head -50
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release-files
+          find artifacts -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.dmg" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.tar.gz" -o -name "*.sig" -o -name "*.zip" \) -exec cp {} release-files/ \;
+          ls -la release-files/
 
       - name: Get version
         id: version
@@ -133,24 +136,14 @@ jobs:
           BASE_URL="https://github.com/Dishairano/hardwave-suite/releases/download/${TAG}"
 
           # Find signature files and read them
-          WIN_SIG=""
-          MAC_SIG=""
-          LINUX_SIG=""
-
-          if [ -f artifacts/*.nsis.zip.sig ]; then
-            WIN_SIG=$(cat artifacts/*.nsis.zip.sig 2>/dev/null | head -1)
-          fi
-          if [ -f artifacts/*.app.tar.gz.sig ]; then
-            MAC_SIG=$(cat artifacts/*.app.tar.gz.sig 2>/dev/null | head -1)
-          fi
-          if [ -f artifacts/*.AppImage.tar.gz.sig ]; then
-            LINUX_SIG=$(cat artifacts/*.AppImage.tar.gz.sig 2>/dev/null | head -1)
-          fi
+          WIN_SIG=$(cat release-files/*.nsis.zip.sig 2>/dev/null || echo "")
+          MAC_SIG=$(cat release-files/*.app.tar.gz.sig 2>/dev/null || echo "")
+          LINUX_SIG=$(cat release-files/*.AppImage.tar.gz.sig 2>/dev/null || echo "")
 
           # Get actual filenames
-          WIN_FILE=$(ls artifacts/*.nsis.zip 2>/dev/null | head -1 | xargs basename 2>/dev/null || echo "")
-          MAC_FILE=$(ls artifacts/*.app.tar.gz 2>/dev/null | head -1 | xargs basename 2>/dev/null || echo "")
-          LINUX_FILE=$(ls artifacts/*.AppImage.tar.gz 2>/dev/null | head -1 | xargs basename 2>/dev/null || echo "")
+          WIN_FILE=$(ls release-files/*.nsis.zip 2>/dev/null | xargs -r basename || echo "")
+          MAC_FILE=$(ls release-files/*.app.tar.gz 2>/dev/null | xargs -r basename || echo "")
+          LINUX_FILE=$(ls release-files/*.AppImage.tar.gz 2>/dev/null | xargs -r basename || echo "")
 
           cat > latest.json << EOF
           {
@@ -185,7 +178,7 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            artifacts/*
+            release-files/*
             latest.json
           body: |
             ## Hardwave Suite ${{ steps.version.outputs.tag }}
