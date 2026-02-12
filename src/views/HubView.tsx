@@ -20,12 +20,12 @@ import {
 import type { File } from '../types'
 
 const proTips = [
-  { title: 'Keyboard Shortcuts', text: 'Press Space to preview any selected sample instantly.' },
-  { title: 'Smart Tagging', text: 'Drag a folder in and tags will be auto-generated from folder names.' },
-  { title: 'Quick Filters', text: 'Use the filter panel to narrow down by BPM, key, or energy level.' },
-  { title: 'Collections', text: 'Group related samples into collections for quick project access.' },
-  { title: 'Kickforge Layers', text: 'Try layering a short punch with a long tail for massive hardstyle kicks.' },
-  { title: 'BPM Detection', text: 'Import your loops and we\'ll auto-detect BPM for easy tempo matching.' },
+  { title: 'Phase Correlation', text: 'Keep your phase meter above 0 for mono compatibility. Below -0.5 means phase issues!' },
+  { title: 'Peak vs RMS', text: 'Use peak meters for clipping, RMS for perceived loudness. Both matter for mastering.' },
+  { title: 'Spectrum Analysis', text: 'Check your low end (20-100Hz) for mud and your highs (10k+) for harshness.' },
+  { title: 'Stereo Width', text: 'Keep your kick and bass centered. Wide stereo on leads creates space in the mix.' },
+  { title: 'Response Time', text: 'Use fast response for transients, slow for overall tonal balance.' },
+  { title: 'Reference Tracks', text: 'Compare your spectrum to professional tracks to check your balance.' },
 ]
 
 const shortcuts = [
@@ -130,82 +130,59 @@ export function HubView({
 
               {/* Stats Grid */}
               <div className="grid grid-cols-4 gap-4">
-                <StatCard icon={<Music className="w-4 h-4" />} label="Total Samples" value={stats.totalFiles.toLocaleString()} color="cyan" />
-                <StatCard icon={<Tag className="w-4 h-4" />} label="Tags Applied" value={stats.totalTags.toLocaleString()} color="purple" />
-                <StatCard icon={<Folder className="w-4 h-4" />} label="Collections" value={stats.totalCollections.toString()} color="pink" />
+                <StatCard icon={<Activity className="w-4 h-4" />} label="Tools Available" value="1" color="cyan" />
+                <StatCard icon={<Zap className="w-4 h-4" />} label="Coming Soon" value="3" color="purple" />
+                <StatCard icon={<Star className="w-4 h-4" />} label="Subscription" value="Active" color="pink" />
                 <StatCard icon={<Clock className="w-4 h-4" />} label="Session Time" value={formatSessionTime(sessionTime)} color="yellow" />
               </div>
             </div>
 
             {/* Tool Cards */}
-            <div className="grid grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 gap-6">
               <ToolCard
-                name="Organizer"
-                description="Browse, search, tag and organize your entire sample library with smart BPM detection and instant preview."
-                icon={<Folder className="w-7 h-7" />}
-                stat={`${stats.totalFiles.toLocaleString()} files indexed`}
-                gradient="from-cyan-500 to-blue-600"
-                onClick={onNavigateOrganizer}
-              />
-              <ToolCard
-                name="Kickforge"
-                description="Design powerful hardstyle, rawstyle and hardcore kicks with 3-layer synthesis, distortion and WAV export."
-                icon={<Zap className="w-7 h-7" />}
-                stat="Kick synthesizer"
-                gradient="from-purple-500 to-pink-600"
-                onClick={onNavigateKickforge}
+                name="Hardwave Analyser"
+                description="All-in-one spectrum analyzer, stereo/phase monitoring, and level metering. Real-time analysis with peak hold, RMS modes, and phase correlation."
+                icon={<Activity className="w-7 h-7" />}
+                stat="Audio analysis tool"
+                gradient="from-orange-500 to-green-500"
+                onClick={() => window.open('https://github.com/Dishairano/hardwave-suite/releases', '_blank')}
               />
             </div>
 
             {/* Quick Actions */}
             <div className="flex gap-3">
-              <ActionButton icon={<FolderPlus className="w-4 h-4" />} label="Import Folder" primary onClick={onImportFolder} />
-              <ActionButton icon={<Tag className="w-4 h-4" />} label="Create Tag" onClick={onCreateTag} />
-              <ActionButton icon={<Folder className="w-4 h-4" />} label="New Collection" onClick={onCreateCollection} />
-              <ActionButton icon={<Search className="w-4 h-4" />} label="Browse Files" onClick={onNavigateOrganizer} />
+              <ActionButton icon={<Activity className="w-4 h-4" />} label="Launch Analyser" primary onClick={() => window.open('https://github.com/Dishairano/hardwave-suite/releases', '_blank')} />
+              <ActionButton icon={<Settings className="w-4 h-4" />} label="Settings" onClick={onNavigateSettings} />
             </div>
 
-            {/* Recent Files or Getting Started */}
+            {/* Getting Started */}
             <div>
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-sm font-semibold text-zinc-400 uppercase tracking-wider">
-                  {hasFiles ? 'Recent Files' : 'Getting Started'}
+                  Getting Started
                 </h2>
-                {hasFiles && recentFiles.length > 0 && (
-                  <button onClick={onNavigateOrganizer} className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 transition-colors">
-                    View all <ChevronRight className="w-3 h-3" />
-                  </button>
-                )}
               </div>
 
-              {hasFiles && recentFiles.length > 0 ? (
-                <div className="grid grid-cols-4 gap-4">
-                  {recentFiles.slice(0, 4).map((file) => (
-                    <RecentFileCard key={file.id} file={file} />
-                  ))}
-                </div>
-              ) : (
-                <div className="grid grid-cols-3 gap-4">
-                  <GettingStartedStep
-                    step={1}
-                    title="Import your samples"
-                    description="Add folders containing your kicks, snares, loops and one-shots."
-                    icon={<FolderPlus className="w-5 h-5" />}
-                  />
-                  <GettingStartedStep
-                    step={2}
-                    title="Organize with tags"
-                    description="Auto-tag from folder names or create custom tags and collections."
-                    icon={<Tag className="w-5 h-5" />}
-                  />
-                  <GettingStartedStep
-                    step={3}
-                    title="Start producing"
-                    description="Search, preview and drag files straight into your DAW."
-                    icon={<Music className="w-5 h-5" />}
-                  />
-                </div>
-              )}
+              <div className="grid grid-cols-3 gap-4">
+                <GettingStartedStep
+                  step={1}
+                  title="Download Analyser"
+                  description="Get the latest version of Hardwave Analyser from GitHub releases."
+                  icon={<Activity className="w-5 h-5" />}
+                />
+                <GettingStartedStep
+                  step={2}
+                  title="Route your audio"
+                  description="Use virtual audio cable or your DAW's monitoring to send audio to the analyser."
+                  icon={<Volume2 className="w-5 h-5" />}
+                />
+                <GettingStartedStep
+                  step={3}
+                  title="Analyze & improve"
+                  description="Check spectrum, stereo width, phase and levels in real-time while mixing."
+                  icon={<Zap className="w-5 h-5" />}
+                />
+              </div>
             </div>
 
             {/* Pro Tip */}
@@ -258,14 +235,14 @@ export function HubView({
           </div>
         </div>
 
-        {/* Activity Feed */}
+        {/* Available Tools */}
         <div className="flex-1 p-5 overflow-y-auto">
-          <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-4">Recent Activity</h3>
+          <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-4">Available Tools</h3>
           <div className="space-y-3">
-            <ActivityItem time="2m ago" text="Scanned 'Kicks 2024' folder" icon={<Folder className="w-3 h-3" />} />
-            <ActivityItem time="15m ago" text="Added 'Hardstyle' tag to 12 files" icon={<Tag className="w-3 h-3" />} />
-            <ActivityItem time="1h ago" text="Created 'Bangers' collection" icon={<Star className="w-3 h-3" />} />
-            <ActivityItem time="2h ago" text="Exported kick from Kickforge" icon={<Zap className="w-3 h-3" />} />
+            <ActivityItem time="Ready" text="Hardwave Analyser - Spectrum & metering" icon={<Activity className="w-3 h-3" />} />
+            <ActivityItem time="Coming" text="Sample Organizer - File management" icon={<Folder className="w-3 h-3" />} />
+            <ActivityItem time="Coming" text="Kickforge - Kick synthesizer" icon={<Zap className="w-3 h-3" />} />
+            <ActivityItem time="Coming" text="More tools in development..." icon={<Star className="w-3 h-3" />} />
           </div>
         </div>
 
