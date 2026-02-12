@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Hardwave Suite",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "identifier": "com.hardwavestudios.organizer",
   "build": {
     "frontendDist": "../dist",
@@ -53,7 +53,7 @@
       "endpoints": [
         "https://github.com/Dishairano/hardwave-suite/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdBMkVCNjAwNjA0RTdEQjEKUldTeGZVNWdBTFl1ZWpVTFRWOEljZ0JVelRXZ0FHMk5EcitzWWJYUkRuTVVMaTF4L253RFNZWHcK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU4NjlBNURFOEEwRjI4MzgKUldRNEtBK0szcVZwNkhyRk9LcHF2c2tXUzNFbkZtT2F6U0lFRDVFaERqMWM1SXRsTGxVUkU0RWgK"
     }
   }
 }
