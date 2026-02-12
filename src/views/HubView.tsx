@@ -8,16 +8,12 @@ import {
   Activity,
   Clock,
   Star,
-  Tag,
-  FolderPlus,
-  Search,
   Lightbulb,
   ChevronRight,
   RefreshCw,
   Keyboard,
   Volume2
 } from 'lucide-react'
-import type { File } from '../types'
 
 const proTips = [
   { title: 'Phase Correlation', text: 'Keep your phase meter above 0 for mono compatibility. Below -0.5 means phase issues!' },
@@ -38,25 +34,13 @@ const shortcuts = [
 interface HubViewProps {
   user: { email: string; displayName: string | null } | null
   stats: { totalFiles: number; totalTags: number; totalCollections: number; totalFavorites: number }
-  recentFiles: File[]
-  onNavigateOrganizer: () => void
-  onNavigateKickforge: () => void
   onNavigateSettings: () => void
-  onImportFolder: () => void
-  onCreateTag: () => void
-  onCreateCollection: () => void
 }
 
 export function HubView({
   user,
   stats,
-  recentFiles,
-  onNavigateOrganizer,
-  onNavigateKickforge,
   onNavigateSettings,
-  onImportFolder,
-  onCreateTag,
-  onCreateCollection,
 }: HubViewProps) {
   const [tipIndex, setTipIndex] = useState(() => Math.floor(Math.random() * proTips.length))
   const [sessionTime, setSessionTime] = useState(0)
@@ -340,38 +324,6 @@ function ActionButton({ icon, label, primary, onClick }: { icon: React.ReactNode
       {icon}
       {label}
     </button>
-  )
-}
-
-function RecentFileCard({ file }: { file: File }) {
-  return (
-    <div className="bg-[#111113] rounded-xl border border-[#27272a] p-4 hover:border-[#3f3f46] transition-all cursor-pointer group">
-      {/* Waveform placeholder */}
-      <div className="h-12 rounded-lg bg-[#18181b] mb-3 flex items-end justify-center gap-px p-2 overflow-hidden">
-        {Array.from({ length: 24 }).map((_, i) => (
-          <div
-            key={i}
-            className="w-1 bg-cyan-500/40 rounded-full group-hover:bg-cyan-500/60 transition-colors"
-            style={{ height: `${20 + Math.random() * 80}%` }}
-          />
-        ))}
-      </div>
-      <div className="text-sm font-medium text-white truncate mb-1" title={file.filename}>
-        {file.filename}
-      </div>
-      <div className="flex items-center gap-2">
-        {file.bpm && (
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400">
-            {Math.round(file.bpm)} BPM
-          </span>
-        )}
-        {file.detected_key && (
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400">
-            {file.detected_key}
-          </span>
-        )}
-      </div>
-    </div>
   )
 }
 

@@ -213,13 +213,7 @@ function App() {
           <HubView
             user={auth.user}
             stats={stats}
-            recentFiles={files.slice(0, 8)}
-            onNavigateOrganizer={() => setCurrentTool('organizer')}
-            onNavigateKickforge={() => setCurrentTool('kickforge')}
             onNavigateSettings={() => setCurrentTool('settings')}
-            onImportFolder={() => openModal('import')}
-            onCreateTag={() => openModal('tagManagement')}
-            onCreateCollection={() => openModal('createCollection')}
           />
         )
       case 'kickforge':
