@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { open } from '@tauri-apps/plugin-shell'
 import {
   Music,
   Folder,
@@ -129,13 +130,13 @@ export function HubView({
                 icon={<Activity className="w-7 h-7" />}
                 stat="Audio analysis tool"
                 gradient="from-orange-500 to-green-500"
-                onClick={() => window.open('https://github.com/Dishairano/hardwave-suite/releases', '_blank')}
+                onClick={() => open('https://github.com/Dishairano/hardwave-suite/releases')}
               />
             </div>
 
             {/* Quick Actions */}
             <div className="flex gap-3">
-              <ActionButton icon={<Activity className="w-4 h-4" />} label="Launch Analyser" primary onClick={() => window.open('https://github.com/Dishairano/hardwave-suite/releases', '_blank')} />
+              <ActionButton icon={<Activity className="w-4 h-4" />} label="Launch Analyser" primary onClick={() => open('https://github.com/Dishairano/hardwave-suite/releases')} />
               <ActionButton icon={<Settings className="w-4 h-4" />} label="Settings" onClick={onNavigateSettings} />
             </div>
 
