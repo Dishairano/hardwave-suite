@@ -52,10 +52,13 @@ jobs:
       - run: npm ci
 
       - name: Build Tauri
-        run: npm run tauri build -- --target ${{ matrix.target }}
+        uses: tauri-apps/tauri-action@v0
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        with:
+          args: --target ${{ matrix.target }}
 
       - name: Upload artifacts (Windows)
         if: matrix.platform == 'windows-latest'
