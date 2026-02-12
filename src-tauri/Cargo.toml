@@ -1,6 +1,6 @@
 [package]
 name = "hardwave-suite"
-version = "0.5.3"
+version = "0.5.4"
 description = "Hardwave Suite - Production toolkit for harder-styles producers"
 authors = ["Hardwave Studios"]
 license = "MIT"

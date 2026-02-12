@@ -13,6 +13,9 @@ on:
 permissions:
   contents: write
 
+env:
+  RELEASES_REPO: Dishairano/hardwave-suite-releases
+
 jobs:
   build:
     strategy:
@@ -68,12 +71,8 @@ jobs:
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
             src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.nsis.zip
-            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.nsis.zip.sig
             src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
             src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi.zip
-            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi.zip.sig
 
       - name: Upload artifacts (macOS)
         if: matrix.platform == 'macos-latest'
@@ -82,7 +81,6 @@ jobs:
           name: artifacts-macos
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
             src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
             src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
 
@@ -94,8 +92,6 @@ jobs:
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
             src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage.tar.gz
-            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage.tar.gz.sig
             src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
 
   release:
@@ -146,7 +142,7 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           NOTES="Bug fixes and improvements"
           PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          BASE_URL="https://github.com/Dishairano/hardwave-suite/releases/download/${TAG}"
+          BASE_URL="https://github.com/${{ env.RELEASES_REPO }}/releases/download/${TAG}"
 
           pick_file() {
             local pattern="$1"
@@ -162,9 +158,9 @@ jobs:
             tr -d '\r\n' < "release-files/${file}.sig"
           }
 
-          WIN_FILE="$(pick_file '*.nsis.zip')"
+          WIN_FILE="$(pick_file '*-setup.exe')"
           MAC_FILE="$(pick_file '*.app.tar.gz')"
-          LINUX_FILE="$(pick_file '*.AppImage.tar.gz')"
+          LINUX_FILE="$(pick_file '*.AppImage')"
 
           WIN_SIG="$(read_sig "$WIN_FILE")"
           MAC_SIG="$(read_sig "$MAC_FILE")"
@@ -220,6 +216,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          repository: ${{ env.RELEASES_REPO }}
+          token: ${{ secrets.HW_RELEASES_REPO_TOKEN }}
           tag_name: ${{ steps.version.outputs.tag }}
           name: Hardwave Suite ${{ steps.version.outputs.tag }}
           draft: false
