@@ -5,3 +5,4 @@ src-tauri/target/
 .env.local
 *.log
 .DS_Store
+*-this-session-is-being-continued-from-a-previous-co.txt

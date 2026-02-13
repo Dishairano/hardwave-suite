@@ -9,13 +9,28 @@ import {
   Volume2,
   Gauge,
   Activity,
-  Radio,
   Check,
   Mic,
   ChevronDown,
   Plug,
+  Camera,
+  Eye,
+  EyeOff,
+  Trash2,
+  X,
 } from 'lucide-react'
 import { useVstAudio } from '../hooks/useVstAudio'
+import {
+  clamp,
+  dbToPower,
+  powerToDb,
+  formatFreq,
+  formatDb,
+  freqToNote,
+  generateLogTicks,
+  lerp,
+  randomId,
+} from '../lib/analyserMath'
 
 // Types
 type ResponseTime = 'fast' | 'medium' | 'slow'
@@ -23,6 +38,12 @@ type TiltMode = 'off' | '-3dB' | '-4.5dB'
 type WeightingMode = 'flat' | 'dBA' | 'dBC'
 type SpectrumMode = 'peak' | 'rms'
 type AudioSource = 'mic' | 'vst'
+type SpectrumView = 'spectrum' | 'delta'
+type DbRange = 60 | 90 | 120
+
+type TraceId = 'mix' | 'l' | 'r' | 'm' | 's'
+
+type TraceToggles = Record<TraceId, boolean>
 
 interface AnalyserState {
   spectrumMode: SpectrumMode
@@ -32,6 +53,11 @@ interface AnalyserState {
   frozen: boolean
   peakHold: boolean
   audioSource: AudioSource
+  view: SpectrumView
+  dbRange: DbRange
+  showAvg: boolean
+  showRef: boolean
+  traces: TraceToggles
 }
 
 interface AnalyserViewProps {
@@ -40,15 +66,14 @@ interface AnalyserViewProps {
 
 // Constants
 const FFT_SIZE = 8192
-const NUM_BANDS = 64
+const DISPLAY_BANDS = 256
+const VST_BANDS = 64
 const MIN_FREQ = 20
 const MAX_FREQ = 20000
 const SMOOTHING_FAST = 0.6
 const SMOOTHING_MEDIUM = 0.8
 const SMOOTHING_SLOW = 0.92
-
-// Frequency labels for spectrum
-const FREQ_LABELS = [20, 50, 100, 200, 500, '1k', '2k', '5k', '10k', '20k']
+const SPECTRUM_PAD = { left: 44, right: 14, top: 10, bottom: 20 } as const
 
 // A-weighting coefficients (simplified)
 const getAWeighting = (freq: number): number => {
@@ -67,6 +92,48 @@ const getCWeighting = (freq: number): number => {
   return 0.06 + 20 * Math.log10(num / den + 1e-10)
 }
 
+type Snapshot = {
+  id: string
+  name: string
+  createdAt: number
+  trace: Float32Array // mix trace in dB
+}
+
+type HoverInfo = {
+  freqHz: number
+  db: number
+  note: string | null
+  cents: number | null
+  deltaDb: number | null
+}
+
+type MeterStats = {
+  leftPeakDb: number
+  rightPeakDb: number
+  leftTruePeakDb: number
+  rightTruePeakDb: number
+  rmsDb: number
+  crestDb: number
+  correlation: number
+  width: number
+  dcOffsetL: number
+  dcOffsetR: number
+  lufsM: number | null
+  lufsS: number | null
+  lufsI: number | null
+  kickFundHz: number | null
+  kickNote: string | null
+  kickRatios: { sub: number; punch: number; tail: number } | null
+}
+
+type StereoBand = {
+  label: string
+  lowHz: number
+  highHz: number
+  correlation: number
+  width: number
+}
+
 export function AnalyserView({ onBack }: AnalyserViewProps) {
   // State
   const [state, setState] = useState<AnalyserState>({
@@ -76,7 +143,12 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
     weightingMode: 'flat',
     frozen: false,
     peakHold: true,
-    audioSource: 'mic'
+    audioSource: 'mic',
+    view: 'spectrum',
+    dbRange: 90,
+    showAvg: true,
+    showRef: true,
+    traces: { mix: true, l: false, r: false, m: false, s: false },
   })
 
   // VST audio hook
@@ -88,6 +160,30 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([])
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
   const [showDeviceSelector, setShowDeviceSelector] = useState(false)
+  const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null)
+  const [meterStats, setMeterStats] = useState<MeterStats>({
+    leftPeakDb: -100,
+    rightPeakDb: -100,
+    leftTruePeakDb: -100,
+    rightTruePeakDb: -100,
+    rmsDb: -100,
+    crestDb: 0,
+    correlation: 0,
+    width: 0,
+    dcOffsetL: 0,
+    dcOffsetR: 0,
+    lufsM: null,
+    lufsS: null,
+    lufsI: null,
+    kickFundHz: null,
+    kickNote: null,
+    kickRatios: null,
+  })
+  const [stereoBands, setStereoBands] = useState<StereoBand[]>([])
+  const [snapshots, setSnapshots] = useState<Snapshot[]>([])
+  const [refAId, setRefAId] = useState<string | null>(null)
+  const [refBId, setRefBId] = useState<string | null>(null)
+  const [activeRefSlot, setActiveRefSlot] = useState<'A' | 'B'>('A')
 
   // Audio refs
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -97,17 +193,56 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const animationRef = useRef<number | null>(null)
+  const silentGainRef = useRef<GainNode | null>(null)
+  const loudnessAnalyserRef = useRef<AnalyserNode | null>(null)
 
   // Canvas refs
   const spectrumCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const phaseCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const stereoCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const peakCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const scopeCanvasRef = useRef<HTMLCanvasElement | null>(null)
 
   // Data refs
-  const spectrumDataRef = useRef<Float32Array>(new Float32Array(NUM_BANDS))
-  const spectrumPeakRef = useRef<Float32Array>(new Float32Array(NUM_BANDS))
-  const peakDecayRef = useRef<Float32Array>(new Float32Array(NUM_BANDS))
+  const spectrumTracesRef = useRef<Record<TraceId, Float32Array>>({
+    mix: (() => { const a = new Float32Array(DISPLAY_BANDS); a.fill(-100); return a })(),
+    l: (() => { const a = new Float32Array(DISPLAY_BANDS); a.fill(-100); return a })(),
+    r: (() => { const a = new Float32Array(DISPLAY_BANDS); a.fill(-100); return a })(),
+    m: (() => { const a = new Float32Array(DISPLAY_BANDS); a.fill(-100); return a })(),
+    s: (() => { const a = new Float32Array(DISPLAY_BANDS); a.fill(-100); return a })(),
+  })
+  const spectrumPeakRef = useRef<Record<TraceId, Float32Array>>({
+    mix: (() => { const a = new Float32Array(DISPLAY_BANDS); a.fill(-100); return a })(),
+    l: (() => { const a = new Float32Array(DISPLAY_BANDS); a.fill(-100); return a })(),
+    r: (() => { const a = new Float32Array(DISPLAY_BANDS); a.fill(-100); return a })(),
+    m: (() => { const a = new Float32Array(DISPLAY_BANDS); a.fill(-100); return a })(),
+    s: (() => { const a = new Float32Array(DISPLAY_BANDS); a.fill(-100); return a })(),
+  })
+  const peakDecayRef = useRef<Record<TraceId, Float32Array>>({
+    mix: new Float32Array(DISPLAY_BANDS),
+    l: new Float32Array(DISPLAY_BANDS),
+    r: new Float32Array(DISPLAY_BANDS),
+    m: new Float32Array(DISPLAY_BANDS),
+    s: new Float32Array(DISPLAY_BANDS),
+  })
+  const spectrumAvgRef = useRef<Float32Array>((() => { const a = new Float32Array(DISPLAY_BANDS); a.fill(-100); return a })())
+  const logTicksRef = useRef(generateLogTicks(MIN_FREQ, MAX_FREQ))
+  const bandFreqsRef = useRef<Float32Array>((() => {
+    const a = new Float32Array(DISPLAY_BANDS)
+    const logMin = Math.log10(MIN_FREQ)
+    const logMax = Math.log10(MAX_FREQ)
+    for (let i = 0; i < DISPLAY_BANDS; i++) {
+      const t = (i + 0.5) / DISPLAY_BANDS
+      a[i] = Math.pow(10, logMin + t * (logMax - logMin))
+    }
+    return a
+  })())
+  const bandBinStartRef = useRef<Int32Array>(new Int32Array(DISPLAY_BANDS))
+  const bandBinEndRef = useRef<Int32Array>(new Int32Array(DISPLAY_BANDS))
+  const midPowerRef = useRef<Float32Array>(new Float32Array(DISPLAY_BANDS))
+  const sidePowerRef = useRef<Float32Array>(new Float32Array(DISPLAY_BANDS))
+  const hoverRef = useRef<{ active: boolean; x: number; y: number; band: number } | null>(null)
+  const hoverRafRef = useRef<number | null>(null)
+  const lastStatsUpdateRef = useRef(0)
   const leftPeakRef = useRef(0)
   const rightPeakRef = useRef(0)
   const leftRmsRef = useRef(0)
@@ -118,6 +253,26 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
   const stereoWidthRef = useRef(0.5)
   const clipLeftRef = useRef(false)
   const clipRightRef = useRef(false)
+  const dcOffsetLeftRef = useRef(0)
+  const dcOffsetRightRef = useRef(0)
+  const truePeakLeftRef = useRef(-100)
+  const truePeakRightRef = useRef(-100)
+  const lufsMomentaryRef = useRef<number | null>(null)
+  const lufsShortRef = useRef<number | null>(null)
+  const lufsIntegratedRef = useRef<number | null>(null)
+  const loudnessHistoryRef = useRef<Array<{ t: number; ms: number }>>([])
+  const loudnessIntegratedRef = useRef<{ sum: number; count: number }>({ sum: 0, count: 0 })
+  const kickFundHzRef = useRef<number | null>(null)
+  const kickNoteRef = useRef<string | null>(null)
+  const kickRatiosRef = useRef<{ sub: number; punch: number; tail: number } | null>(null)
+  const activeRefTraceRef = useRef<Float32Array | null>(null)
+  const activeRefNameRef = useRef<string | null>(null)
+  const scopeLeftTimeRef = useRef<Float32Array | null>(null)
+  const scopeRightTimeRef = useRef<Float32Array | null>(null)
+  const drawSpectrumRef = useRef<() => void>(() => {})
+  const drawPhaseRef = useRef<() => void>(() => {})
+  const drawPeakMetersRef = useRef<() => void>(() => {})
+  const drawScopeRef = useRef<() => void>(() => {})
 
   // Get smoothing factor based on response time
   const getSmoothingFactor = useCallback(() => {
@@ -132,7 +287,8 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
   const refreshDevices = useCallback(async () => {
     try {
       // Request permission first to get device labels
-      await navigator.mediaDevices.getUserMedia({ audio: true })
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      stream.getTracks().forEach(t => t.stop())
       const devices = await navigator.mediaDevices.enumerateDevices()
       const audioInputs = devices.filter(d => d.kind === 'audioinput')
       setAudioDevices(audioInputs)
@@ -185,11 +341,15 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
       // Create analysers for left and right channels
       const analyserLeft = audioContext.createAnalyser()
       analyserLeft.fftSize = FFT_SIZE
+      analyserLeft.minDecibels = -120
+      analyserLeft.maxDecibels = 0
       analyserLeft.smoothingTimeConstant = getSmoothingFactor()
       analyserLeftRef.current = analyserLeft
 
       const analyserRight = audioContext.createAnalyser()
       analyserRight.fftSize = FFT_SIZE
+      analyserRight.minDecibels = -120
+      analyserRight.maxDecibels = 0
       analyserRight.smoothingTimeConstant = getSmoothingFactor()
       analyserRightRef.current = analyserRight
 
@@ -197,6 +357,58 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
       source.connect(splitter)
       splitter.connect(analyserLeft, 0)
       splitter.connect(analyserRight, 1)
+
+      // Keep the graph "alive" (some browsers won't process if nothing reaches the destination).
+      // This is silent, so it won't feed back into speakers.
+      const silentGain = audioContext.createGain()
+      silentGain.gain.value = 0
+      silentGain.connect(audioContext.destination)
+      silentGainRef.current = silentGain
+
+      analyserLeft.connect(silentGain)
+      analyserRight.connect(silentGain)
+
+      // Loudness (approx LUFS): mid sum -> K-weighting-ish filters -> analyser -> silent sink.
+      const midGain = audioContext.createGain()
+      midGain.gain.value = 0.5
+      splitter.connect(midGain, 0)
+      splitter.connect(midGain, 1)
+
+      const kHighpass = audioContext.createBiquadFilter()
+      kHighpass.type = 'highpass'
+      kHighpass.frequency.value = 60
+      kHighpass.Q.value = 0.707
+
+      const kShelf = audioContext.createBiquadFilter()
+      kShelf.type = 'highshelf'
+      kShelf.frequency.value = 4000
+      kShelf.gain.value = 4
+
+      const loudnessAnalyser = audioContext.createAnalyser()
+      loudnessAnalyser.fftSize = 2048
+      loudnessAnalyser.smoothingTimeConstant = 0
+      loudnessAnalyserRef.current = loudnessAnalyser
+
+      midGain.connect(kHighpass)
+      kHighpass.connect(kShelf)
+      kShelf.connect(loudnessAnalyser)
+      loudnessAnalyser.connect(silentGain)
+
+      // Precompute bin ranges for log-spaced display bands (depends on sample rate).
+      const binCount = analyserLeft.frequencyBinCount
+      const logMin = Math.log10(MIN_FREQ)
+      const logMax = Math.log10(MAX_FREQ)
+      for (let i = 0; i < DISPLAY_BANDS; i++) {
+        const t0 = i / DISPLAY_BANDS
+        const t1 = (i + 1) / DISPLAY_BANDS
+        const f0 = Math.pow(10, logMin + t0 * (logMax - logMin))
+        const f1 = Math.pow(10, logMin + t1 * (logMax - logMin))
+
+        const b0 = clamp(Math.floor(freqToBin(f0, audioContext.sampleRate, analyserLeft.fftSize)), 0, binCount - 1)
+        const b1 = clamp(Math.ceil(freqToBin(f1, audioContext.sampleRate, analyserLeft.fftSize)), b0, binCount - 1)
+        bandBinStartRef.current[i] = b0
+        bandBinEndRef.current[i] = b1
+      }
 
       setIsRunning(true)
 
@@ -222,6 +434,8 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
       audioContextRef.current.close()
       audioContextRef.current = null
     }
+    silentGainRef.current = null
+    loudnessAnalyserRef.current = null
 
     setIsRunning(false)
   }, [])
@@ -267,21 +481,44 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
     }
   }, [refreshDevices])
 
+  // Keep active reference trace in a ref for fast access during canvas draws.
+  useEffect(() => {
+    const activeId = activeRefSlot === 'A' ? refAId : refBId
+    const snap = activeId ? snapshots.find(s => s.id === activeId) : null
+    activeRefTraceRef.current = snap ? snap.trace : null
+    activeRefNameRef.current = snap ? snap.name : null
+  }, [snapshots, refAId, refBId, activeRefSlot])
+
   // Reset all meters
   const resetMeters = useCallback(() => {
-    spectrumDataRef.current.fill(-100)
-    spectrumPeakRef.current.fill(-100)
-    peakDecayRef.current.fill(0)
-    leftPeakRef.current = 0
-    rightPeakRef.current = 0
+    (['mix', 'l', 'r', 'm', 's'] as const).forEach((id) => {
+      spectrumTracesRef.current[id].fill(-100)
+      spectrumPeakRef.current[id].fill(-100)
+      peakDecayRef.current[id].fill(0)
+    })
+    spectrumAvgRef.current.fill(-100)
+    leftPeakRef.current = -100
+    rightPeakRef.current = -100
     leftRmsRef.current = 0
     rightRmsRef.current = 0
-    leftPeakHoldRef.current = 0
-    rightPeakHoldRef.current = 0
+    leftPeakHoldRef.current = -100
+    rightPeakHoldRef.current = -100
     phaseCorrelationRef.current = 0
-    stereoWidthRef.current = 0.5
+    stereoWidthRef.current = 0
     clipLeftRef.current = false
     clipRightRef.current = false
+    dcOffsetLeftRef.current = 0
+    dcOffsetRightRef.current = 0
+    truePeakLeftRef.current = -100
+    truePeakRightRef.current = -100
+    loudnessHistoryRef.current = []
+    loudnessIntegratedRef.current = { sum: 0, count: 0 }
+    lufsMomentaryRef.current = null
+    lufsShortRef.current = null
+    lufsIntegratedRef.current = null
+    kickFundHzRef.current = null
+    kickNoteRef.current = null
+    kickRatiosRef.current = null
   }, [])
 
   // Copy values to clipboard
@@ -289,15 +526,111 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
     const values = {
       leftPeak: leftPeakHoldRef.current.toFixed(1) + ' dB',
       rightPeak: rightPeakHoldRef.current.toFixed(1) + ' dB',
+      leftTruePeak: truePeakLeftRef.current.toFixed(1) + ' dBTP',
+      rightTruePeak: truePeakRightRef.current.toFixed(1) + ' dBTP',
       leftRms: (20 * Math.log10(leftRmsRef.current + 1e-10)).toFixed(1) + ' dB',
       rightRms: (20 * Math.log10(rightRmsRef.current + 1e-10)).toFixed(1) + ' dB',
+      lufsMomentary: lufsMomentaryRef.current,
+      lufsShortTerm: lufsShortRef.current,
+      lufsIntegrated: lufsIntegratedRef.current,
+      dcOffsetLeft: dcOffsetLeftRef.current,
+      dcOffsetRight: dcOffsetRightRef.current,
       phaseCorrelation: phaseCorrelationRef.current.toFixed(2),
-      stereoWidth: (stereoWidthRef.current * 100).toFixed(0) + '%'
+      stereoWidth: (stereoWidthRef.current * 100).toFixed(0) + '%',
+      kickFundamentalHz: kickFundHzRef.current,
+      kickNote: kickNoteRef.current,
+      kickRatios: kickRatiosRef.current,
     }
 
     navigator.clipboard.writeText(JSON.stringify(values, null, 2))
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
+  }, [])
+
+  const scheduleHoverUpdate = useCallback(() => {
+    if (hoverRafRef.current != null) return
+    hoverRafRef.current = window.requestAnimationFrame(() => {
+      hoverRafRef.current = null
+      const h = hoverRef.current
+      if (!h || !h.active) {
+        setHoverInfo(null)
+        return
+      }
+
+      const band = clamp(h.band, 0, DISPLAY_BANDS - 1)
+      const freq = bandFreqsRef.current[band]
+      const note = freqToNote(freq)
+
+      const mix = spectrumTracesRef.current.mix
+      const ref = activeRefTraceRef.current
+      const baseDb = mix[band]
+      const delta = ref ? (baseDb - ref[band]) : null
+
+      const db = state.view === 'delta' ? (delta ?? 0) : baseDb
+
+      setHoverInfo({
+        freqHz: freq,
+        db,
+        note: note?.note ?? null,
+        cents: note?.cents ?? null,
+        deltaDb: state.view === 'delta' ? null : delta,
+      })
+    })
+  }, [state.view])
+
+  const handleSpectrumMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = clamp(e.clientX - rect.left, 0, rect.width)
+    const y = clamp(e.clientY - rect.top, 0, rect.height)
+
+    const plotW = Math.max(1, rect.width - SPECTRUM_PAD.left - SPECTRUM_PAD.right)
+    const xPlot = clamp(x - SPECTRUM_PAD.left, 0, plotW)
+    const band = clamp(Math.round((xPlot / plotW) * (DISPLAY_BANDS - 1)), 0, DISPLAY_BANDS - 1)
+
+    hoverRef.current = { active: true, x, y, band }
+    scheduleHoverUpdate()
+  }, [scheduleHoverUpdate])
+
+  const handleSpectrumMouseLeave = useCallback(() => {
+    hoverRef.current = null
+    setHoverInfo(null)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (hoverRafRef.current != null) {
+        cancelAnimationFrame(hoverRafRef.current)
+      }
+    }
+  }, [])
+
+  const captureSnapshot = useCallback(() => {
+    const id = randomId('snap')
+    const createdAt = Date.now()
+    const trace = new Float32Array(DISPLAY_BANDS)
+    trace.set(spectrumTracesRef.current.mix)
+
+    const snap: Snapshot = {
+      id,
+      createdAt,
+      name: `Snapshot ${new Date(createdAt).toLocaleTimeString()}`,
+      trace,
+    }
+
+    setSnapshots((prev) => [snap, ...prev].slice(0, 30))
+    if (activeRefSlot === 'A') setRefAId(id)
+    else setRefBId(id)
+  }, [activeRefSlot])
+
+  const deleteSnapshot = useCallback((id: string) => {
+    setSnapshots((prev) => prev.filter((s) => s.id !== id))
+    if (refAId === id) setRefAId(null)
+    if (refBId === id) setRefBId(null)
+  }, [refAId, refBId])
+
+  const assignSnapshot = useCallback((id: string, slot: 'A' | 'B') => {
+    if (slot === 'A') setRefAId(id)
+    else setRefBId(id)
   }, [])
 
   // Frequency to bin index
@@ -307,10 +640,8 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
 
   // Get frequency for band (logarithmic scale)
   const getBandFrequency = useCallback((band: number): number => {
-    const logMin = Math.log10(MIN_FREQ)
-    const logMax = Math.log10(MAX_FREQ)
-    const logFreq = logMin + (band / NUM_BANDS) * (logMax - logMin)
-    return Math.pow(10, logFreq)
+    const idx = clamp(Math.floor(band), 0, DISPLAY_BANDS - 1)
+    return bandFreqsRef.current[idx] || MIN_FREQ
   }, [])
 
   // Apply tilt compensation
@@ -343,35 +674,78 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
       const smoothing = getSmoothingFactor()
       const data = vstState.audioData
 
-      // Update spectrum data from VST
-      for (let i = 0; i < NUM_BANDS && i < data.left_bands.length; i++) {
-        // Average left and right or use peak depending on mode
-        let bandValue: number
-        if (state.spectrumMode === 'peak') {
-          bandValue = Math.max(data.left_bands[i], data.right_bands[i])
-        } else {
-          bandValue = (data.left_bands[i] + data.right_bands[i]) / 2
-        }
+      // Update log-spaced display bands by resampling VST bands.
+      // VST Bridge provides 64 log bands (-100..0 dB). We interpolate in log-frequency space.
+      const inLeft = data.left_bands
+      const inRight = data.right_bands
+      const inLen = Math.min(inLeft.length, inRight.length, VST_BANDS)
+      const traces = spectrumTracesRef.current
+      const peaks = spectrumPeakRef.current
+      const decays = peakDecayRef.current
 
-        // Apply tilt and weighting
-        const centerFreq = getBandFrequency(i)
-        bandValue = applyTilt(bandValue, centerFreq)
-        bandValue = applyWeighting(bandValue, centerFreq)
+      let midSum = 0
+      let sideSum = 0
 
-        // Smooth spectrum data
-        spectrumDataRef.current[i] = spectrumDataRef.current[i] * smoothing + bandValue * (1 - smoothing)
+      for (let i = 0; i < DISPLAY_BANDS; i++) {
+        const t = (i + 0.5) / DISPLAY_BANDS
+        const pos = t * inLen - 0.5
+        const j0 = clamp(Math.floor(pos), 0, inLen - 1)
+        const j1 = clamp(j0 + 1, 0, inLen - 1)
+        const frac = clamp(pos - j0, 0, 1)
 
-        // Update peak hold
+        const lDbRaw = lerp(inLeft[j0] ?? -100, inLeft[j1] ?? -100, frac)
+        const rDbRaw = lerp(inRight[j0] ?? -100, inRight[j1] ?? -100, frac)
+
+        const pL = dbToPower(lDbRaw)
+        const pR = dbToPower(rDbRaw)
+
+        const ampL = Math.sqrt(pL)
+        const ampR = Math.sqrt(pR)
+        const midAmp = (ampL + ampR) * 0.5
+        const sideAmp = Math.abs(ampL - ampR) * 0.5
+        const midPower = midAmp * midAmp
+        const sidePower = sideAmp * sideAmp
+        midPowerRef.current[i] = midPower
+        sidePowerRef.current[i] = sidePower
+        midSum += midPower
+        sideSum += sidePower
+
+        // Combine channels: peak is max(L, R); RMS uses power average.
+        const mixDbRaw = state.spectrumMode === 'peak'
+          ? Math.max(lDbRaw, rDbRaw)
+          : powerToDb((pL + pR) * 0.5)
+
+        const centerFreq = bandFreqsRef.current[i] || getBandFrequency(i)
+
+        // Apply tilt + weighting to displayed traces.
+        const lDb = applyWeighting(applyTilt(lDbRaw, centerFreq), centerFreq)
+        const rDb = applyWeighting(applyTilt(rDbRaw, centerFreq), centerFreq)
+        const mDb = applyWeighting(applyTilt(powerToDb(midPower), centerFreq), centerFreq)
+        const sDb = applyWeighting(applyTilt(powerToDb(sidePower), centerFreq), centerFreq)
+        const mixDb = applyWeighting(applyTilt(mixDbRaw, centerFreq), centerFreq)
+
+        traces.l[i] = traces.l[i] * smoothing + lDb * (1 - smoothing)
+        traces.r[i] = traces.r[i] * smoothing + rDb * (1 - smoothing)
+        traces.m[i] = traces.m[i] * smoothing + mDb * (1 - smoothing)
+        traces.s[i] = traces.s[i] * smoothing + sDb * (1 - smoothing)
+        traces.mix[i] = traces.mix[i] * smoothing + mixDb * (1 - smoothing)
+
+        // Slow average of the mix trace (for "AVG" overlay).
+        const avgSmoothing = 0.985
+        spectrumAvgRef.current[i] = spectrumAvgRef.current[i] * avgSmoothing + traces.mix[i] * (1 - avgSmoothing)
+
+        // Peak hold per trace (cheap, but makes L/R/M/S useful).
         if (state.peakHold) {
-          if (spectrumDataRef.current[i] > spectrumPeakRef.current[i]) {
-            spectrumPeakRef.current[i] = spectrumDataRef.current[i]
-            peakDecayRef.current[i] = 0
-          } else {
-            peakDecayRef.current[i]++
-            if (peakDecayRef.current[i] > 60) {
-              spectrumPeakRef.current[i] -= 0.5
+          ;(['mix', 'l', 'r', 'm', 's'] as const).forEach((id) => {
+            const v = traces[id][i]
+            if (v > peaks[id][i]) {
+              peaks[id][i] = v
+              decays[id][i] = 0
+            } else {
+              decays[id][i] += 1
+              if (decays[id][i] > 60) peaks[id][i] -= 0.5
             }
-          }
+          })
         }
       }
 
@@ -380,6 +754,8 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
       rightPeakRef.current = Math.max(rightPeakRef.current * 0.95, data.right_peak)
       leftRmsRef.current = leftRmsRef.current * smoothing + data.left_rms * (1 - smoothing)
       rightRmsRef.current = rightRmsRef.current * smoothing + data.right_rms * (1 - smoothing)
+      truePeakLeftRef.current = leftPeakRef.current
+      truePeakRightRef.current = rightPeakRef.current
 
       // Peak hold
       if (state.peakHold) {
@@ -391,24 +767,101 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
       if (data.left_peak > -0.1) clipLeftRef.current = true
       if (data.right_peak > -0.1) clipRightRef.current = true
 
-      // Calculate phase correlation from stereo data (simplified)
-      // Use the difference between left and right RMS as a proxy
-      const totalRms = data.left_rms + data.right_rms
-      if (totalRms > 0.001) {
-        const diff = Math.abs(data.left_rms - data.right_rms) / totalRms
-        phaseCorrelationRef.current = 1 - diff  // Higher = more correlated
-      }
-
-      // Stereo width
-      if (totalRms > 0.001) {
-        stereoWidthRef.current = Math.abs(data.left_rms - data.right_rms) / totalRms
-      }
+      // Estimate stereo width from mid/side energy ratio (0 = mono, 1 = very wide).
+      const denomMs = midSum + sideSum
+      stereoWidthRef.current = denomMs > 0 ? sideSum / denomMs : 0
+      // Correlation proxy derived from M/S balance (not true phase correlation).
+      phaseCorrelationRef.current = denomMs > 0 ? (midSum - sideSum) / denomMs : 0
+      dcOffsetLeftRef.current = 0
+      dcOffsetRightRef.current = 0
 
       // Draw all canvases
-      drawSpectrum()
-      drawPhase()
-      drawStereo()
-      drawPeakMeters()
+      drawSpectrumRef.current()
+      drawPhaseRef.current()
+      drawPeakMetersRef.current()
+      drawScopeRef.current()
+
+      // Update UI readouts at a lower rate to avoid re-rendering at 60fps.
+      const now = performance.now()
+      if (now - lastStatsUpdateRef.current > 120) {
+        lastStatsUpdateRef.current = now
+
+        const avgRms = (leftRmsRef.current + rightRmsRef.current) * 0.5
+        const rmsDb = 20 * Math.log10(avgRms + 1e-10)
+        const crestDb = Math.max(leftPeakRef.current, rightPeakRef.current) - rmsDb
+
+        // Kick metrics (from spectrum)
+        const mixTrace = spectrumTracesRef.current.mix
+        let fundHz: number | null = null
+        let fundDb = -200
+        let subPow = 0
+        let punchPow = 0
+        let tailPow = 0
+        for (let i = 0; i < DISPLAY_BANDS; i++) {
+          const f = bandFreqsRef.current[i]
+          const p = dbToPower(mixTrace[i])
+          if (f >= 30 && f <= 200 && mixTrace[i] > fundDb) {
+            fundDb = mixTrace[i]
+            fundHz = f
+          }
+          if (f >= 20 && f < 60) subPow += p
+          else if (f >= 60 && f < 150) punchPow += p
+          else if (f >= 150 && f < 400) tailPow += p
+        }
+        const totalKick = subPow + punchPow + tailPow
+        const ratios = totalKick > 0 ? {
+          sub: subPow / totalKick,
+          punch: punchPow / totalKick,
+          tail: tailPow / totalKick,
+        } : null
+        const note = fundHz ? freqToNote(fundHz) : null
+        kickFundHzRef.current = fundHz
+        kickNoteRef.current = note?.note ?? null
+        kickRatiosRef.current = ratios
+
+        // Band width strip (derived from M/S energy)
+        const bands: StereoBand[] = [
+          { label: 'Sub', lowHz: 20, highHz: 80, correlation: 0, width: 0 },
+          { label: 'Bass', lowHz: 80, highHz: 200, correlation: 0, width: 0 },
+          { label: 'LowMid', lowHz: 200, highHz: 600, correlation: 0, width: 0 },
+          { label: 'Mid', lowHz: 600, highHz: 2000, correlation: 0, width: 0 },
+          { label: 'High', lowHz: 2000, highHz: 6000, correlation: 0, width: 0 },
+          { label: 'Air', lowHz: 6000, highHz: 20000, correlation: 0, width: 0 },
+        ]
+        for (const b of bands) {
+          let mP = 0
+          let sP = 0
+          for (let i = 0; i < DISPLAY_BANDS; i++) {
+            const f = bandFreqsRef.current[i]
+            if (f < b.lowHz || f >= b.highHz) continue
+            mP += midPowerRef.current[i]
+            sP += sidePowerRef.current[i]
+          }
+          const d = mP + sP
+          b.width = d > 0 ? sP / d : 0
+          b.correlation = d > 0 ? (mP - sP) / d : 0
+        }
+        setStereoBands(bands)
+
+        setMeterStats({
+          leftPeakDb: leftPeakRef.current,
+          rightPeakDb: rightPeakRef.current,
+          leftTruePeakDb: truePeakLeftRef.current,
+          rightTruePeakDb: truePeakRightRef.current,
+          rmsDb,
+          crestDb,
+          correlation: phaseCorrelationRef.current,
+          width: stereoWidthRef.current,
+          dcOffsetL: dcOffsetLeftRef.current,
+          dcOffsetR: dcOffsetRightRef.current,
+          lufsM: lufsMomentaryRef.current,
+          lufsS: lufsShortRef.current,
+          lufsI: lufsIntegratedRef.current,
+          kickFundHz: kickFundHzRef.current,
+          kickNote: kickNoteRef.current,
+          kickRatios: kickRatiosRef.current,
+        })
+      }
 
       animationRef.current = requestAnimationFrame(draw)
     }
@@ -420,8 +873,19 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
         cancelAnimationFrame(animationRef.current)
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isRunning, state.frozen, state.audioSource, state.spectrumMode, state.peakHold, vstState.vstConnected, vstState.audioData, getSmoothingFactor, getBandFrequency, applyTilt, applyWeighting])
+  }, [
+    isRunning,
+    state.frozen,
+    state.audioSource,
+    state.spectrumMode,
+    state.peakHold,
+    vstState.vstConnected,
+    vstState.audioData,
+    getSmoothingFactor,
+    getBandFrequency,
+    applyTilt,
+    applyWeighting,
+  ])
 
   // Mic animation loop
   useEffect(() => {
@@ -437,6 +901,10 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
     const rightFreqData = new Float32Array(analyserRight.frequencyBinCount)
     const leftTimeData = new Float32Array(analyserLeft.fftSize)
     const rightTimeData = new Float32Array(analyserRight.fftSize)
+    scopeLeftTimeRef.current = leftTimeData
+    scopeRightTimeRef.current = rightTimeData
+    const loudAnalyser = loudnessAnalyserRef.current
+    const loudData = loudAnalyser ? new Float32Array(loudAnalyser.fftSize) : null
 
     const smoothing = getSmoothingFactor()
     analyserLeft.smoothingTimeConstant = smoothing
@@ -453,98 +921,162 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
       analyserLeft.getFloatTimeDomainData(leftTimeData)
       analyserRight.getFloatTimeDomainData(rightTimeData)
 
-      // Calculate spectrum bands (1/3 octave smoothing)
-      for (let i = 0; i < NUM_BANDS; i++) {
-        const centerFreq = getBandFrequency(i)
-        const lowFreq = centerFreq / Math.pow(2, 1/6)
-        const highFreq = centerFreq * Math.pow(2, 1/6)
+      // Calculate log-spaced spectrum bands (power domain) and update trace buffers.
+      const traces = spectrumTracesRef.current
+      const peaks = spectrumPeakRef.current
+      const decays = peakDecayRef.current
 
-        const lowBin = freqToBin(lowFreq, audioContext.sampleRate, analyserLeft.fftSize)
-        const highBin = freqToBin(highFreq, audioContext.sampleRate, analyserLeft.fftSize)
+      let midSum = 0
+      let sideSum = 0
 
-        let sum = 0
+      for (let i = 0; i < DISPLAY_BANDS; i++) {
+        const startBin = bandBinStartRef.current[i]
+        const endBin = bandBinEndRef.current[i]
+
+        let sumPL = 0
+        let sumPR = 0
         let count = 0
 
-        for (let bin = lowBin; bin <= highBin && bin < leftFreqData.length; bin++) {
-          const leftVal = leftFreqData[bin]
-          const rightVal = rightFreqData[bin]
-
-          if (state.spectrumMode === 'peak') {
-            sum += Math.max(leftVal, rightVal)
-          } else {
-            // RMS averaging
-            sum += (leftVal + rightVal) / 2
-          }
+        for (let bin = startBin; bin <= endBin && bin < leftFreqData.length; bin++) {
+          const lDb = leftFreqData[bin]
+          const rDb = rightFreqData[bin]
+          sumPL += dbToPower(lDb)
+          sumPR += dbToPower(rDb)
           count++
         }
 
-        let bandValue = count > 0 ? sum / count : -100
+        const pL = count > 0 ? sumPL / count : 1e-20
+        const pR = count > 0 ? sumPR / count : 1e-20
+        const lDbRaw = powerToDb(pL)
+        const rDbRaw = powerToDb(pR)
 
-        // Apply tilt and weighting
-        bandValue = applyTilt(bandValue, centerFreq)
-        bandValue = applyWeighting(bandValue, centerFreq)
+        const ampL = Math.sqrt(pL)
+        const ampR = Math.sqrt(pR)
+        const midAmp = (ampL + ampR) * 0.5
+        const sideAmp = Math.abs(ampL - ampR) * 0.5
+        const midPower = midAmp * midAmp
+        const sidePower = sideAmp * sideAmp
+        midPowerRef.current[i] = midPower
+        sidePowerRef.current[i] = sidePower
+        midSum += midPower
+        sideSum += sidePower
 
-        // Smooth spectrum data
-        spectrumDataRef.current[i] = spectrumDataRef.current[i] * smoothing + bandValue * (1 - smoothing)
+        const mixDbRaw = state.spectrumMode === 'peak'
+          ? Math.max(lDbRaw, rDbRaw)
+          : powerToDb((pL + pR) * 0.5)
 
-        // Update peak hold
+        const centerFreq = bandFreqsRef.current[i] || getBandFrequency(i)
+
+        const lDb = applyWeighting(applyTilt(lDbRaw, centerFreq), centerFreq)
+        const rDb = applyWeighting(applyTilt(rDbRaw, centerFreq), centerFreq)
+        const mDb = applyWeighting(applyTilt(powerToDb(midPower), centerFreq), centerFreq)
+        const sDb = applyWeighting(applyTilt(powerToDb(sidePower), centerFreq), centerFreq)
+        const mixDb = applyWeighting(applyTilt(mixDbRaw, centerFreq), centerFreq)
+
+        traces.l[i] = traces.l[i] * smoothing + lDb * (1 - smoothing)
+        traces.r[i] = traces.r[i] * smoothing + rDb * (1 - smoothing)
+        traces.m[i] = traces.m[i] * smoothing + mDb * (1 - smoothing)
+        traces.s[i] = traces.s[i] * smoothing + sDb * (1 - smoothing)
+        traces.mix[i] = traces.mix[i] * smoothing + mixDb * (1 - smoothing)
+
+        // Slow average (for "AVG" overlay)
+        const avgSmoothing = 0.985
+        spectrumAvgRef.current[i] = spectrumAvgRef.current[i] * avgSmoothing + traces.mix[i] * (1 - avgSmoothing)
+
+        // Peak hold
         if (state.peakHold) {
-          if (spectrumDataRef.current[i] > spectrumPeakRef.current[i]) {
-            spectrumPeakRef.current[i] = spectrumDataRef.current[i]
-            peakDecayRef.current[i] = 0
-          } else {
-            peakDecayRef.current[i]++
-            if (peakDecayRef.current[i] > 60) {
-              spectrumPeakRef.current[i] -= 0.5
+          ;(['mix', 'l', 'r', 'm', 's'] as const).forEach((id) => {
+            const v = traces[id][i]
+            if (v > peaks[id][i]) {
+              peaks[id][i] = v
+              decays[id][i] = 0
+            } else {
+              decays[id][i] += 1
+              if (decays[id][i] > 60) peaks[id][i] -= 0.5
             }
-          }
+          })
         }
       }
 
-      // Calculate levels
-      let leftPeak = 0
-      let rightPeak = 0
-      let leftRms = 0
-      let rightRms = 0
-      let correlation = 0
-      let leftEnergy = 0
-      let rightEnergy = 0
+      // Calculate levels (time domain)
+      let leftPeakAmp = 0
+      let rightPeakAmp = 0
+      let leftTpAmp = 0
+      let rightTpAmp = 0
+      let sumL2 = 0
+      let sumR2 = 0
+      let sumLR = 0
+      let sumMid2 = 0
+      let sumSide2 = 0
+      let meanL = 0
+      let meanR = 0
+
+      let prevL = leftTimeData[0] || 0
+      let prevR = rightTimeData[0] || 0
 
       for (let i = 0; i < leftTimeData.length; i++) {
         const l = leftTimeData[i]
         const r = rightTimeData[i]
 
-        leftPeak = Math.max(leftPeak, Math.abs(l))
-        rightPeak = Math.max(rightPeak, Math.abs(r))
+        meanL += l
+        meanR += r
 
-        leftRms += l * l
-        rightRms += r * r
+        const absL = Math.abs(l)
+        const absR = Math.abs(r)
+        if (absL > leftPeakAmp) leftPeakAmp = absL
+        if (absR > rightPeakAmp) rightPeakAmp = absR
 
-        correlation += l * r
-        leftEnergy += l * l
-        rightEnergy += r * r
+        leftTpAmp = Math.max(leftTpAmp, absL)
+        rightTpAmp = Math.max(rightTpAmp, absR)
+
+        if (i > 0) {
+          const dL = l - prevL
+          const dR = r - prevR
+          leftTpAmp = Math.max(leftTpAmp, Math.abs(prevL + dL * 0.25), Math.abs(prevL + dL * 0.5), Math.abs(prevL + dL * 0.75))
+          rightTpAmp = Math.max(rightTpAmp, Math.abs(prevR + dR * 0.25), Math.abs(prevR + dR * 0.5), Math.abs(prevR + dR * 0.75))
+          prevL = l
+          prevR = r
+        }
+
+        sumL2 += l * l
+        sumR2 += r * r
+        sumLR += l * r
+
+        const mid = (l + r) * 0.5
+        const side = (l - r) * 0.5
+        sumMid2 += mid * mid
+        sumSide2 += side * side
       }
 
-      leftRms = Math.sqrt(leftRms / leftTimeData.length)
-      rightRms = Math.sqrt(rightRms / rightTimeData.length)
+      const n = leftTimeData.length || 1
+      const leftRmsAmp = Math.sqrt(sumL2 / n)
+      const rightRmsAmp = Math.sqrt(sumR2 / n)
 
-      // Phase correlation
-      const denominator = Math.sqrt(leftEnergy * rightEnergy)
-      phaseCorrelationRef.current = denominator > 0 ? correlation / denominator : 0
+      // DC offset
+      dcOffsetLeftRef.current = meanL / n
+      dcOffsetRightRef.current = meanR / n
 
-      // Stereo width (0 = mono, 1 = wide)
-      const totalEnergy = leftEnergy + rightEnergy
-      stereoWidthRef.current = totalEnergy > 0 ? Math.abs(leftEnergy - rightEnergy) / totalEnergy : 0.5
+      // Phase correlation (broadband)
+      const denominator = Math.sqrt(sumL2 * sumR2)
+      phaseCorrelationRef.current = denominator > 0 ? sumLR / denominator : 0
+
+      // Stereo width (0 = mono, 1 = wide) using Mid/Side energy
+      const msDen = sumMid2 + sumSide2
+      stereoWidthRef.current = msDen > 0 ? sumSide2 / msDen : 0
 
       // Convert to dB
-      const leftPeakDb = 20 * Math.log10(leftPeak + 1e-10)
-      const rightPeakDb = 20 * Math.log10(rightPeak + 1e-10)
+      const leftPeakDb = 20 * Math.log10(leftPeakAmp + 1e-10)
+      const rightPeakDb = 20 * Math.log10(rightPeakAmp + 1e-10)
+      const leftTpDb = 20 * Math.log10(leftTpAmp + 1e-10)
+      const rightTpDb = 20 * Math.log10(rightTpAmp + 1e-10)
 
       // Update levels with smoothing
       leftPeakRef.current = Math.max(leftPeakRef.current * 0.95, leftPeakDb)
       rightPeakRef.current = Math.max(rightPeakRef.current * 0.95, rightPeakDb)
-      leftRmsRef.current = leftRmsRef.current * smoothing + leftRms * (1 - smoothing)
-      rightRmsRef.current = rightRmsRef.current * smoothing + rightRms * (1 - smoothing)
+      leftRmsRef.current = leftRmsRef.current * smoothing + leftRmsAmp * (1 - smoothing)
+      rightRmsRef.current = rightRmsRef.current * smoothing + rightRmsAmp * (1 - smoothing)
+      truePeakLeftRef.current = truePeakLeftRef.current * 0.9 + leftTpDb * 0.1
+      truePeakRightRef.current = truePeakRightRef.current * 0.9 + rightTpDb * 0.1
 
       // Peak hold
       if (state.peakHold) {
@@ -553,14 +1085,144 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
       }
 
       // Clip detection
-      if (leftPeak > 0.99) clipLeftRef.current = true
-      if (rightPeak > 0.99) clipRightRef.current = true
+      if (leftPeakAmp > 0.999) clipLeftRef.current = true
+      if (rightPeakAmp > 0.999) clipRightRef.current = true
+
+      // Loudness (approx): use filtered mid from WebAudio graph.
+      if (loudAnalyser && loudData) {
+        loudAnalyser.getFloatTimeDomainData(loudData)
+        let ms = 0
+        for (let i = 0; i < loudData.length; i++) ms += loudData[i] * loudData[i]
+        ms = ms / (loudData.length || 1)
+
+        const t = performance.now()
+        loudnessHistoryRef.current.push({ t, ms })
+        // Keep enough for short-term + a bit of slack.
+        const maxAge = 3500
+        while (loudnessHistoryRef.current.length > 0 && (t - loudnessHistoryRef.current[0].t) > maxAge) {
+          loudnessHistoryRef.current.shift()
+        }
+
+        const avgMsInWindow = (windowMs: number): number => {
+          let sum = 0
+          let count = 0
+          for (let i = loudnessHistoryRef.current.length - 1; i >= 0; i--) {
+            const it = loudnessHistoryRef.current[i]
+            if (t - it.t > windowMs) break
+            sum += it.ms
+            count++
+          }
+          return count > 0 ? sum / count : 0
+        }
+
+        const msM = avgMsInWindow(400)
+        const msS = avgMsInWindow(3000)
+
+        const toLufs = (meanSquare: number): number | null => {
+          if (meanSquare <= 0) return null
+          return -0.691 + 10 * Math.log10(meanSquare + 1e-20)
+        }
+
+        lufsMomentaryRef.current = toLufs(msM)
+        lufsShortRef.current = toLufs(msS)
+
+        // Integrated (simple absolute gate at -70 LUFS)
+        const lufsInst = toLufs(ms)
+        if (lufsInst !== null && lufsInst > -70) {
+          loudnessIntegratedRef.current.sum += ms
+          loudnessIntegratedRef.current.count += 1
+          const msI = loudnessIntegratedRef.current.sum / Math.max(1, loudnessIntegratedRef.current.count)
+          lufsIntegratedRef.current = toLufs(msI)
+        }
+      }
 
       // Draw all canvases
-      drawSpectrum()
-      drawPhase()
-      drawStereo()
-      drawPeakMeters()
+      drawSpectrumRef.current()
+      drawPhaseRef.current()
+      drawPeakMetersRef.current()
+      drawScopeRef.current()
+
+      // Update UI readouts at a lower rate to avoid re-rendering at 60fps.
+      const now = performance.now()
+      if (now - lastStatsUpdateRef.current > 120) {
+        lastStatsUpdateRef.current = now
+
+        const avgRms = (leftRmsRef.current + rightRmsRef.current) * 0.5
+        const rmsDb = 20 * Math.log10(avgRms + 1e-10)
+        const crestDb = Math.max(leftPeakRef.current, rightPeakRef.current) - rmsDb
+
+        // Kick metrics (from spectrum)
+        const mixTrace = spectrumTracesRef.current.mix
+        let fundHz: number | null = null
+        let fundDb = -200
+        let subPow = 0
+        let punchPow = 0
+        let tailPow = 0
+        for (let i = 0; i < DISPLAY_BANDS; i++) {
+          const f = bandFreqsRef.current[i]
+          const p = dbToPower(mixTrace[i])
+          if (f >= 30 && f <= 200 && mixTrace[i] > fundDb) {
+            fundDb = mixTrace[i]
+            fundHz = f
+          }
+          if (f >= 20 && f < 60) subPow += p
+          else if (f >= 60 && f < 150) punchPow += p
+          else if (f >= 150 && f < 400) tailPow += p
+        }
+        const totalKick = subPow + punchPow + tailPow
+        const ratios = totalKick > 0 ? {
+          sub: subPow / totalKick,
+          punch: punchPow / totalKick,
+          tail: tailPow / totalKick,
+        } : null
+        const note = fundHz ? freqToNote(fundHz) : null
+        kickFundHzRef.current = fundHz
+        kickNoteRef.current = note?.note ?? null
+        kickRatiosRef.current = ratios
+
+        // Band width strip (derived from M/S energy)
+        const bands: StereoBand[] = [
+          { label: 'Sub', lowHz: 20, highHz: 80, correlation: 0, width: 0 },
+          { label: 'Bass', lowHz: 80, highHz: 200, correlation: 0, width: 0 },
+          { label: 'LowMid', lowHz: 200, highHz: 600, correlation: 0, width: 0 },
+          { label: 'Mid', lowHz: 600, highHz: 2000, correlation: 0, width: 0 },
+          { label: 'High', lowHz: 2000, highHz: 6000, correlation: 0, width: 0 },
+          { label: 'Air', lowHz: 6000, highHz: 20000, correlation: 0, width: 0 },
+        ]
+        for (const b of bands) {
+          let mP = 0
+          let sP = 0
+          for (let i = 0; i < DISPLAY_BANDS; i++) {
+            const f = bandFreqsRef.current[i]
+            if (f < b.lowHz || f >= b.highHz) continue
+            mP += midPowerRef.current[i]
+            sP += sidePowerRef.current[i]
+          }
+          const d = mP + sP
+          b.width = d > 0 ? sP / d : 0
+          b.correlation = d > 0 ? (mP - sP) / d : 0
+        }
+        setStereoBands(bands)
+
+        setMeterStats({
+          leftPeakDb: leftPeakRef.current,
+          rightPeakDb: rightPeakRef.current,
+          leftTruePeakDb: truePeakLeftRef.current,
+          rightTruePeakDb: truePeakRightRef.current,
+          rmsDb,
+          crestDb,
+          correlation: phaseCorrelationRef.current,
+          width: stereoWidthRef.current,
+          dcOffsetL: dcOffsetLeftRef.current,
+          dcOffsetR: dcOffsetRightRef.current,
+          lufsM: lufsMomentaryRef.current,
+          lufsS: lufsShortRef.current,
+          lufsI: lufsIntegratedRef.current,
+          kickFundHz: kickFundHzRef.current,
+          kickNote: kickNoteRef.current,
+          kickRatios: kickRatiosRef.current,
+        })
+      }
 
       animationRef.current = requestAnimationFrame(draw)
     }
@@ -568,205 +1230,524 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
     animationRef.current = requestAnimationFrame(draw)
 
     return () => {
+      scopeLeftTimeRef.current = null
+      scopeRightTimeRef.current = null
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current)
       }
     }
-  }, [isRunning, state.frozen, state.audioSource, state.spectrumMode, state.peakHold, getSmoothingFactor, getBandFrequency, freqToBin, applyTilt, applyWeighting])
+  }, [isRunning, state.frozen, state.audioSource, state.spectrumMode, state.peakHold, getSmoothingFactor, getBandFrequency, applyTilt, applyWeighting])
 
   // Draw spectrum analyzer
   const drawSpectrum = useCallback(() => {
     const canvas = spectrumCanvasRef.current
     if (!canvas) return
 
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    const rect = canvas.getBoundingClientRect()
+    const cssW = rect.width
+    const cssH = rect.height
+    if (cssW <= 2 || cssH <= 2) return
 
-    const width = canvas.width
-    const height = canvas.height
-    const barWidth = width / NUM_BANDS - 2
-
-    // Clear
-    ctx.fillStyle = '#0a0a0b'
-    ctx.fillRect(0, 0, width, height)
-
-    // Draw grid
-    ctx.strokeStyle = '#27272a'
-    ctx.lineWidth = 1
-
-    // Horizontal grid lines (dB)
-    for (let db = 0; db >= -60; db -= 12) {
-      const y = height * (1 - (db + 60) / 60)
-      ctx.beginPath()
-      ctx.moveTo(0, y)
-      ctx.lineTo(width, y)
-      ctx.stroke()
-
-      ctx.fillStyle = '#52525b'
-      ctx.font = '10px monospace'
-      ctx.fillText(`${db}`, 4, y - 2)
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    const nextW = Math.max(1, Math.round(cssW * dpr))
+    const nextH = Math.max(1, Math.round(cssH * dpr))
+    if (canvas.width !== nextW || canvas.height !== nextH) {
+      canvas.width = nextW
+      canvas.height = nextH
     }
 
-    // Draw bars
-    const gradient = ctx.createLinearGradient(0, height, 0, 0)
-    gradient.addColorStop(0, '#06b6d4') // cyan
-    gradient.addColorStop(0.5, '#8b5cf6') // purple
-    gradient.addColorStop(0.85, '#f97316') // orange
-    gradient.addColorStop(1, '#ef4444') // red
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-    for (let i = 0; i < NUM_BANDS; i++) {
-      const value = spectrumDataRef.current[i]
-      const normalizedValue = Math.max(0, Math.min(1, (value + 60) / 60))
-      const barHeight = normalizedValue * height
-      const x = i * (barWidth + 2) + 1
+    const pad = SPECTRUM_PAD
+    const plotX = pad.left
+    const plotY = pad.top
+    const plotW = Math.max(1, cssW - pad.left - pad.right)
+    const plotH = Math.max(1, cssH - pad.top - pad.bottom)
 
-      // Main bar
-      ctx.fillStyle = gradient
-      ctx.fillRect(x, height - barHeight, barWidth, barHeight)
+    const logMin = Math.log10(MIN_FREQ)
+    const logMax = Math.log10(MAX_FREQ)
+    const xForFreq = (freq: number): number => {
+      const t = (Math.log10(clamp(freq, MIN_FREQ, MAX_FREQ)) - logMin) / (logMax - logMin)
+      return plotX + t * plotW
+    }
+    const xForBand = (i: number): number => plotX + (i / (DISPLAY_BANDS - 1)) * plotW
 
-      // Peak hold line
-      if (state.peakHold) {
-        const peakValue = spectrumPeakRef.current[i]
-        const normalizedPeak = Math.max(0, Math.min(1, (peakValue + 60) / 60))
-        const peakY = height - normalizedPeak * height
+    const mix = spectrumTracesRef.current.mix
+    const ref = activeRefTraceRef.current
 
-        ctx.fillStyle = '#ffffff'
-        ctx.fillRect(x, peakY - 2, barWidth, 2)
+    const isDelta = state.view === 'delta'
+    const dbTop = isDelta ? 12 : 0
+    const dbBottom = isDelta ? -12 : -state.dbRange
+
+    const yForValue = (db: number): number => {
+      const t = (dbTop - db) / (dbTop - dbBottom)
+      return plotY + clamp(t, 0, 1) * plotH
+    }
+
+    // Background
+    ctx.fillStyle = '#0a0a0b'
+    ctx.fillRect(0, 0, cssW, cssH)
+
+    // Grid: vertical frequency lines
+    const ticks = logTicksRef.current
+    for (const t of ticks) {
+      const x = xForFreq(t.freq)
+      ctx.strokeStyle = t.major ? 'rgba(39, 39, 42, 0.9)' : 'rgba(39, 39, 42, 0.4)'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(x, plotY)
+      ctx.lineTo(x, plotY + plotH)
+      ctx.stroke()
+
+      if (t.major) {
+        ctx.fillStyle = '#71717a'
+        ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'alphabetic'
+        ctx.fillText(t.label, x, cssH - 6)
       }
     }
 
-    // Draw frequency labels
-    ctx.fillStyle = '#71717a'
-    ctx.font = '10px monospace'
-    FREQ_LABELS.forEach((label) => {
-      const freq = typeof label === 'number' ? label : parseInt(label) * 1000
-      const logMin = Math.log10(MIN_FREQ)
-      const logMax = Math.log10(MAX_FREQ)
-      const logFreq = Math.log10(freq)
-      const x = ((logFreq - logMin) / (logMax - logMin)) * width
-      ctx.fillText(String(label), x - 10, height - 4)
-    })
-  }, [state.peakHold])
+    // Grid: horizontal dB lines
+    const step = isDelta ? 6 : 12
+    for (let db = dbTop; db >= dbBottom; db -= step) {
+      const y = yForValue(db)
+      ctx.strokeStyle = 'rgba(39, 39, 42, 0.9)'
+      ctx.beginPath()
+      ctx.moveTo(plotX, y)
+      ctx.lineTo(plotX + plotW, y)
+      ctx.stroke()
+
+      ctx.fillStyle = '#52525b'
+      ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace'
+      ctx.textAlign = 'right'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(`${db}`, plotX - 6, y)
+    }
+
+    // Helpers
+    const drawLine = (data: Float32Array, stroke: string | CanvasGradient, widthPx: number, dashed: boolean = false, alpha: number = 1) => {
+      ctx.save()
+      ctx.globalAlpha = alpha
+      ctx.strokeStyle = stroke
+      ctx.lineWidth = widthPx
+      if (dashed) ctx.setLineDash([4, 4])
+      ctx.beginPath()
+      for (let i = 0; i < DISPLAY_BANDS; i++) {
+        const x = xForBand(i)
+        const y = yForValue(data[i])
+        if (i === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      ctx.stroke()
+      ctx.restore()
+    }
+
+    const drawArea = (data: Float32Array, fill: CanvasGradient, alpha: number) => {
+      ctx.save()
+      ctx.globalAlpha = alpha
+      ctx.fillStyle = fill
+      ctx.beginPath()
+      for (let i = 0; i < DISPLAY_BANDS; i++) {
+        const x = xForBand(i)
+        const y = yForValue(data[i])
+        if (i === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      ctx.lineTo(plotX + plotW, plotY + plotH)
+      ctx.lineTo(plotX, plotY + plotH)
+      ctx.closePath()
+      ctx.fill()
+      ctx.restore()
+    }
+
+    const mixGradient = ctx.createLinearGradient(0, plotY + plotH, 0, plotY)
+    mixGradient.addColorStop(0, '#06b6d4')
+    mixGradient.addColorStop(0.55, '#8b5cf6')
+    mixGradient.addColorStop(0.85, '#f97316')
+    mixGradient.addColorStop(1, '#ef4444')
+
+    if (isDelta) {
+      // Delta view: current mix - reference mix
+      if (!ref) {
+        ctx.fillStyle = '#a1a1aa'
+        ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, \"Apple Color Emoji\", \"Segoe UI Emoji\"'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText('Capture a reference snapshot to view delta.', plotX + plotW / 2, plotY + plotH / 2)
+      } else {
+        // Baseline (0 dB)
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)'
+        ctx.setLineDash([4, 4])
+        ctx.beginPath()
+        ctx.moveTo(plotX, yForValue(0))
+        ctx.lineTo(plotX + plotW, yForValue(0))
+        ctx.stroke()
+        ctx.setLineDash([])
+
+        ctx.beginPath()
+        for (let i = 0; i < DISPLAY_BANDS; i++) {
+          const x = xForBand(i)
+          const d = mix[i] - ref[i]
+          const y = yForValue(d)
+          if (i === 0) ctx.moveTo(x, y)
+          else ctx.lineTo(x, y)
+        }
+        ctx.strokeStyle = '#fbbf24' // amber
+        ctx.lineWidth = 2
+        ctx.stroke()
+      }
+    } else {
+      // Reference + average overlays
+      if (state.showRef && ref) drawLine(ref, 'rgba(148, 163, 184, 0.65)', 1.25, true)
+      if (state.showAvg) drawLine(spectrumAvgRef.current, 'rgba(34, 197, 94, 0.65)', 1.25, true)
+
+      // Mix trace
+      if (state.traces.mix) {
+        drawArea(mix, mixGradient, 0.14)
+        drawLine(mix, mixGradient, 2)
+      }
+
+      // Optional additional traces
+      const traceStyles: Record<Exclude<TraceId, 'mix'>, { color: string; width: number; alpha?: number }> = {
+        l: { color: 'rgba(6, 182, 212, 0.9)', width: 1.4 },
+        r: { color: 'rgba(168, 85, 247, 0.85)', width: 1.4 },
+        m: { color: 'rgba(34, 197, 94, 0.85)', width: 1.4 },
+        s: { color: 'rgba(249, 115, 22, 0.85)', width: 1.4 },
+      }
+
+      ;(['l', 'r', 'm', 's'] as const).forEach((id) => {
+        if (!state.traces[id]) return
+        const st = traceStyles[id]
+        drawLine(spectrumTracesRef.current[id], st.color, st.width, false, st.alpha ?? 1)
+      })
+
+      // Peak hold markers (only for visible traces to reduce clutter)
+      if (state.peakHold) {
+        const visible: TraceId[] = []
+        if (state.traces.mix) visible.push('mix')
+        if (state.traces.l) visible.push('l')
+        if (state.traces.r) visible.push('r')
+        if (state.traces.m) visible.push('m')
+        if (state.traces.s) visible.push('s')
+        for (const id of visible) {
+          const peak = spectrumPeakRef.current[id]
+          ctx.save()
+          ctx.globalAlpha = id === 'mix' ? 0.9 : 0.55
+          ctx.strokeStyle = '#ffffff'
+          ctx.lineWidth = 1
+          for (let i = 0; i < DISPLAY_BANDS; i += 2) {
+            const x = xForBand(i)
+            const y = yForValue(peak[i])
+            ctx.beginPath()
+            ctx.moveTo(x - 2, y)
+            ctx.lineTo(x + 2, y)
+            ctx.stroke()
+          }
+          ctx.restore()
+        }
+      }
+    }
+
+    // Hover crosshair + tooltip
+    const hover = hoverRef.current
+    if (hover && hover.active) {
+      const band = clamp(hover.band, 0, DISPLAY_BANDS - 1)
+      const x = xForBand(band)
+      const freq = bandFreqsRef.current[band]
+      const baseDb = mix[band]
+      const d = ref ? baseDb - ref[band] : null
+      const v = isDelta ? (d ?? 0) : baseDb
+      const y = yForValue(v)
+
+      // Crosshair lines
+      ctx.save()
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(x, plotY)
+      ctx.lineTo(x, plotY + plotH)
+      ctx.stroke()
+      ctx.beginPath()
+      ctx.moveTo(plotX, y)
+      ctx.lineTo(plotX + plotW, y)
+      ctx.stroke()
+      ctx.restore()
+
+      // Point marker
+      ctx.fillStyle = '#ffffff'
+      ctx.beginPath()
+      ctx.arc(x, y, 2.5, 0, Math.PI * 2)
+      ctx.fill()
+
+      // Tooltip
+      const roundRectPath = (x: number, y: number, w: number, h: number, r: number) => {
+        const anyCtx = ctx as CanvasRenderingContext2D & { roundRect?: (x: number, y: number, w: number, h: number, radii: number) => void }
+        if (typeof anyCtx.roundRect === 'function') {
+          anyCtx.roundRect(x, y, w, h, r)
+          return
+        }
+
+        const rr = Math.max(0, Math.min(r, w / 2, h / 2))
+        ctx.moveTo(x + rr, y)
+        ctx.lineTo(x + w - rr, y)
+        ctx.quadraticCurveTo(x + w, y, x + w, y + rr)
+        ctx.lineTo(x + w, y + h - rr)
+        ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h)
+        ctx.lineTo(x + rr, y + h)
+        ctx.quadraticCurveTo(x, y + h, x, y + h - rr)
+        ctx.lineTo(x, y + rr)
+        ctx.quadraticCurveTo(x, y, x + rr, y)
+      }
+
+      const note = freqToNote(freq)
+      const lines = [
+        `${formatFreq(freq)}  ${note?.note ?? ''}${note?.cents ? ` ${note.cents >= 0 ? '+' : ''}${note.cents}c` : ''}`.trim(),
+        isDelta ? `Δ ${formatDb(v).replace(' dB', '')} dB` : `${formatDb(baseDb)}`,
+        !isDelta && d !== null ? `Δ ${d >= 0 ? '+' : ''}${d.toFixed(1)} dB vs ${activeRefNameRef.current ?? 'Ref'}` : '',
+      ].filter(Boolean)
+
+      const tooltipX = clamp(x + 10, plotX + 6, plotX + plotW - 160)
+      const tooltipY = clamp(y - 30, plotY + 6, plotY + plotH - 56)
+      ctx.save()
+      ctx.fillStyle = 'rgba(17, 17, 19, 0.92)'
+      ctx.strokeStyle = 'rgba(39, 39, 42, 0.9)'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      roundRectPath(tooltipX, tooltipY, 160, 54, 8)
+      ctx.fill()
+      ctx.stroke()
+      ctx.fillStyle = '#e4e4e7'
+      ctx.font = '11px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial'
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'top'
+      for (let i = 0; i < lines.length; i++) {
+        ctx.fillText(lines[i], tooltipX + 10, tooltipY + 8 + i * 16)
+      }
+      ctx.restore()
+    }
+  }, [state.view, state.dbRange, state.showAvg, state.showRef, state.traces, state.peakHold])
+  drawSpectrumRef.current = drawSpectrum
 
   // Draw phase correlation meter
   const drawPhase = useCallback(() => {
     const canvas = phaseCanvasRef.current
     if (!canvas) return
 
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    const rect = canvas.getBoundingClientRect()
+    const cssW = rect.width
+    const cssH = rect.height
+    if (cssW <= 2 || cssH <= 2) return
 
-    const width = canvas.width
-    const height = canvas.height
-
-    // Clear
-    ctx.fillStyle = '#0a0a0b'
-    ctx.fillRect(0, 0, width, height)
-
-    // Draw scale
-    const centerY = height / 2
-
-    // Warning zone (out of phase: -1 to -0.5)
-    ctx.fillStyle = 'rgba(239, 68, 68, 0.2)'
-    ctx.fillRect(0, centerY, width, height / 2)
-
-    // Safe zone (in phase: 0 to +1)
-    ctx.fillStyle = 'rgba(34, 197, 94, 0.1)'
-    ctx.fillRect(0, 0, width, centerY)
-
-    // Draw labels
-    ctx.fillStyle = '#71717a'
-    ctx.font = '10px monospace'
-    ctx.textAlign = 'center'
-    ctx.fillText('+1', width / 2, 12)
-    ctx.fillText('0', width / 2, centerY + 4)
-    ctx.fillText('-1', width / 2, height - 4)
-
-    // Draw correlation bar
-    const correlation = phaseCorrelationRef.current
-    const barHeight = Math.abs(correlation) * (height / 2)
-    const barY = correlation >= 0 ? centerY - barHeight : centerY
-
-    const barColor = correlation < -0.5 ? '#ef4444' : correlation < 0 ? '#f97316' : '#22c55e'
-    ctx.fillStyle = barColor
-    ctx.fillRect(width / 2 - 20, barY, 40, barHeight)
-
-    // Correlation value
-    ctx.fillStyle = '#ffffff'
-    ctx.font = 'bold 14px monospace'
-    ctx.fillText(correlation.toFixed(2), width / 2, height / 2 + 30)
-
-    // Mono compatibility indicator
-    const monoCompat = correlation > 0.5 ? 'GOOD' : correlation > 0 ? 'OK' : 'WARN'
-    const monoColor = correlation > 0.5 ? '#22c55e' : correlation > 0 ? '#f97316' : '#ef4444'
-    ctx.fillStyle = monoColor
-    ctx.font = 'bold 10px monospace'
-    ctx.fillText(monoCompat, width / 2, height / 2 + 50)
-  }, [])
-
-  // Draw stereo width meter
-  const drawStereo = useCallback(() => {
-    const canvas = stereoCanvasRef.current
-    if (!canvas) return
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    const nextW = Math.max(1, Math.round(cssW * dpr))
+    const nextH = Math.max(1, Math.round(cssH * dpr))
+    if (canvas.width !== nextW || canvas.height !== nextH) {
+      canvas.width = nextW
+      canvas.height = nextH
+    }
 
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-    const width = canvas.width
-    const height = canvas.height
-
-    // Clear
     ctx.fillStyle = '#0a0a0b'
-    ctx.fillRect(0, 0, width, height)
+    ctx.fillRect(0, 0, cssW, cssH)
 
-    // Draw L/R labels
-    ctx.fillStyle = '#71717a'
-    ctx.font = '10px monospace'
-    ctx.textAlign = 'left'
-    ctx.fillText('L', 4, height / 2 + 4)
-    ctx.textAlign = 'right'
-    ctx.fillText('R', width - 4, height / 2 + 4)
+    const corr = clamp(phaseCorrelationRef.current, -1, 1)
+    const pad = 14
+    const barW = Math.max(1, cssW - pad * 2)
+    const barH = 10
+    const barY = cssH / 2
 
-    // Draw center line
-    ctx.strokeStyle = '#52525b'
+    // Correlation gradient: red -> orange -> green
+    const grad = ctx.createLinearGradient(pad, 0, pad + barW, 0)
+    grad.addColorStop(0, '#ef4444')
+    grad.addColorStop(0.5, '#f97316')
+    grad.addColorStop(1, '#22c55e')
+
+    ctx.fillStyle = 'rgba(24, 24, 27, 1)'
+    ctx.fillRect(pad, barY - barH / 2, barW, barH)
+    ctx.fillStyle = grad
+    ctx.globalAlpha = 0.28
+    ctx.fillRect(pad, barY - barH / 2, barW, barH)
+    ctx.globalAlpha = 1
+
+    // Border + center mark
+    ctx.strokeStyle = 'rgba(39, 39, 42, 1)'
+    ctx.lineWidth = 1
+    ctx.strokeRect(pad, barY - barH / 2, barW, barH)
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)'
     ctx.beginPath()
-    ctx.moveTo(width / 2, 0)
-    ctx.lineTo(width / 2, height)
+    ctx.moveTo(pad + barW / 2, barY - barH / 2 - 6)
+    ctx.lineTo(pad + barW / 2, barY + barH / 2 + 6)
     ctx.stroke()
 
-    // Draw stereo width bar
-    const centerX = width / 2
-    const leftEnergy = 1 - stereoWidthRef.current
-    const rightEnergy = stereoWidthRef.current
+    // Indicator
+    const x = pad + ((corr + 1) / 2) * barW
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.moveTo(x, barY - barH / 2 - 8)
+    ctx.lineTo(x, barY + barH / 2 + 8)
+    ctx.stroke()
 
-    const leftWidth = leftEnergy * (width / 2 - 20)
-    const rightWidth = rightEnergy * (width / 2 - 20)
+    // Labels
+    ctx.fillStyle = '#a1a1aa'
+    ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace'
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+    ctx.fillText('-1', pad, barY + barH / 2 + 10)
+    ctx.textAlign = 'center'
+    ctx.fillText('0', pad + barW / 2, barY + barH / 2 + 10)
+    ctx.textAlign = 'right'
+    ctx.fillText('+1', pad + barW, barY + barH / 2 + 10)
 
-    // Left channel
-    const leftGradient = ctx.createLinearGradient(centerX - leftWidth, 0, centerX, 0)
-    leftGradient.addColorStop(0, '#06b6d4')
-    leftGradient.addColorStop(1, '#8b5cf6')
-    ctx.fillStyle = leftGradient
-    ctx.fillRect(centerX - leftWidth, height / 2 - 10, leftWidth, 20)
+    const monoCompat = corr > 0.5 ? 'GOOD' : corr > 0 ? 'OK' : 'WARN'
+    const monoColor = corr > 0.5 ? '#22c55e' : corr > 0 ? '#f97316' : '#ef4444'
 
-    // Right channel
-    const rightGradient = ctx.createLinearGradient(centerX, 0, centerX + rightWidth, 0)
-    rightGradient.addColorStop(0, '#8b5cf6')
-    rightGradient.addColorStop(1, '#06b6d4')
-    ctx.fillStyle = rightGradient
-    ctx.fillRect(centerX, height / 2 - 10, rightWidth, 20)
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'alphabetic'
+    ctx.fillStyle = '#e4e4e7'
+    ctx.font = 'bold 16px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace'
+    ctx.fillText(corr.toFixed(2), cssW / 2, 22)
+
+    ctx.fillStyle = monoColor
+    ctx.font = 'bold 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace'
+    ctx.fillText(`MONO ${monoCompat}`, cssW / 2, 38)
   }, [])
+  drawPhaseRef.current = drawPhase
+
+  // Draw vectorscope / goniometer (mic mode). VST mode doesn't provide time-domain samples.
+  const drawScope = useCallback(() => {
+    const canvas = scopeCanvasRef.current
+    if (!canvas) return
+
+    const rect = canvas.getBoundingClientRect()
+    const cssW = rect.width
+    const cssH = rect.height
+    if (cssW <= 2 || cssH <= 2) return
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    const nextW = Math.max(1, Math.round(cssW * dpr))
+    const nextH = Math.max(1, Math.round(cssH * dpr))
+    if (canvas.width !== nextW || canvas.height !== nextH) {
+      canvas.width = nextW
+      canvas.height = nextH
+    }
+
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+
+    ctx.fillStyle = '#0a0a0b'
+    ctx.fillRect(0, 0, cssW, cssH)
+
+    const left = scopeLeftTimeRef.current
+    const right = scopeRightTimeRef.current
+    if (!left || !right) {
+      ctx.fillStyle = '#71717a'
+      ctx.font = '11px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText('Vectorscope available in Mic mode', cssW / 2, cssH / 2)
+      return
+    }
+
+    const cx = cssW / 2
+    const cy = cssH / 2
+    const r = Math.min(cssW, cssH) * 0.45
+
+    // Grid
+    ctx.strokeStyle = 'rgba(39, 39, 42, 1)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(cx - r, cy)
+    ctx.lineTo(cx + r, cy)
+    ctx.moveTo(cx, cy - r)
+    ctx.lineTo(cx, cy + r)
+    ctx.stroke()
+
+    ctx.strokeStyle = 'rgba(39, 39, 42, 0.7)'
+    ctx.beginPath()
+    ctx.moveTo(cx - r, cy - r)
+    ctx.lineTo(cx + r, cy + r)
+    ctx.moveTo(cx - r, cy + r)
+    ctx.lineTo(cx + r, cy - r)
+    ctx.stroke()
+
+    // Plot: rotate into Mid/Side axes so mono is a vertical line.
+    const n = Math.min(left.length, right.length)
+    const step = Math.max(1, Math.floor(n / 900))
+
+    ctx.save()
+    ctx.globalCompositeOperation = 'lighter'
+    ctx.strokeStyle = 'rgba(6, 182, 212, 0.65)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+
+    let first = true
+    for (let i = 0; i < n; i += step) {
+      const l = left[i]
+      const rr = right[i]
+      const x = (l - rr) * (1 / Math.SQRT2)
+      const y = (l + rr) * (1 / Math.SQRT2)
+      const px = cx + x * r
+      const py = cy - y * r
+      if (first) {
+        ctx.moveTo(px, py)
+        first = false
+      } else {
+        ctx.lineTo(px, py)
+      }
+    }
+    ctx.stroke()
+    ctx.restore()
+
+    // Labels
+    ctx.fillStyle = '#52525b'
+    ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace'
+
+    ctx.textBaseline = 'middle'
+    ctx.textAlign = 'left'
+    ctx.fillText('-S', 6, cy)
+    ctx.textAlign = 'right'
+    ctx.fillText('+S', cssW - 6, cy)
+
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'top'
+    ctx.fillText('+M', cx, 6)
+    ctx.textBaseline = 'bottom'
+    ctx.fillText('-M', cx, cssH - 6)
+  }, [])
+  drawScopeRef.current = drawScope
 
   // Draw peak meters
   const drawPeakMeters = useCallback(() => {
     const canvas = peakCanvasRef.current
     if (!canvas) return
 
+    const rect = canvas.getBoundingClientRect()
+    const cssW = rect.width
+    const cssH = rect.height
+    if (cssW <= 2 || cssH <= 2) return
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    const nextW = Math.max(1, Math.round(cssW * dpr))
+    const nextH = Math.max(1, Math.round(cssH * dpr))
+    if (canvas.width !== nextW || canvas.height !== nextH) {
+      canvas.width = nextW
+      canvas.height = nextH
+    }
+
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-    const width = canvas.width
-    const height = canvas.height
+    const width = cssW
+    const height = cssH
 
     // Clear
     ctx.fillStyle = '#0a0a0b'
@@ -854,6 +1835,7 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
     // Draw right peak meter
     drawMeter(rightX, rightPeakRef.current, 20 * Math.log10(rightRmsRef.current + 1e-10), rightPeakHoldRef.current, clipRightRef.current, 'R')
   }, [state.peakHold])
+  drawPeakMetersRef.current = drawPeakMeters
 
   // Cleanup on unmount
   useEffect(() => {
@@ -862,54 +1844,15 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
     }
   }, [stopAudio])
 
-  // Update canvas sizes on resize
-  useEffect(() => {
-    const updateCanvasSizes = () => {
-      const spectrumCanvas = spectrumCanvasRef.current
-      const phaseCanvas = phaseCanvasRef.current
-      const stereoCanvas = stereoCanvasRef.current
-      const peakCanvas = peakCanvasRef.current
+  const activeRefId = activeRefSlot === 'A' ? refAId : refBId
+  const activeRefSnapshot = activeRefId ? snapshots.find(s => s.id === activeRefId) : null
+  const refASnapshot = refAId ? snapshots.find(s => s.id === refAId) : null
+  const refBSnapshot = refBId ? snapshots.find(s => s.id === refBId) : null
 
-      if (spectrumCanvas) {
-        const rect = spectrumCanvas.getBoundingClientRect()
-        spectrumCanvas.width = rect.width * window.devicePixelRatio
-        spectrumCanvas.height = rect.height * window.devicePixelRatio
-        const ctx = spectrumCanvas.getContext('2d')
-        if (ctx) ctx.scale(window.devicePixelRatio, window.devicePixelRatio)
-      }
-
-      if (phaseCanvas) {
-        const rect = phaseCanvas.getBoundingClientRect()
-        phaseCanvas.width = rect.width * window.devicePixelRatio
-        phaseCanvas.height = rect.height * window.devicePixelRatio
-        const ctx = phaseCanvas.getContext('2d')
-        if (ctx) ctx.scale(window.devicePixelRatio, window.devicePixelRatio)
-      }
-
-      if (stereoCanvas) {
-        const rect = stereoCanvas.getBoundingClientRect()
-        stereoCanvas.width = rect.width * window.devicePixelRatio
-        stereoCanvas.height = rect.height * window.devicePixelRatio
-        const ctx = stereoCanvas.getContext('2d')
-        if (ctx) ctx.scale(window.devicePixelRatio, window.devicePixelRatio)
-      }
-
-      if (peakCanvas) {
-        const rect = peakCanvas.getBoundingClientRect()
-        peakCanvas.width = rect.width * window.devicePixelRatio
-        peakCanvas.height = rect.height * window.devicePixelRatio
-        const ctx = peakCanvas.getContext('2d')
-        if (ctx) ctx.scale(window.devicePixelRatio, window.devicePixelRatio)
-      }
-    }
-
-    updateCanvasSizes()
-    window.addEventListener('resize', updateCanvasSizes)
-
-    return () => {
-      window.removeEventListener('resize', updateCanvasSizes)
-    }
-  }, [])
+  const formatLufs = (value: number | null): string => {
+    if (value == null || !Number.isFinite(value)) return '--'
+    return value.toFixed(1)
+  }
 
   return (
     <div className="flex-1 flex flex-col bg-[#0a0a0b] overflow-hidden">
@@ -1067,18 +2010,51 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden p-4 gap-4">
-        {/* Left: Spectrum + Meters */}
-        <div className="flex-1 flex flex-col gap-4">
-          {/* Spectrum Analyzer */}
-          <div className="flex-1 bg-[#111113] rounded-xl border border-[#27272a] p-4 flex flex-col">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-4 overflow-hidden p-4">
+        {/* Left: Spectrum + Bottom Row */}
+        <div className="flex flex-col gap-4 min-w-0 overflow-hidden">
+          {/* Spectrum */}
+          <div className="flex-1 bg-[#111113] rounded-xl border border-[#27272a] p-4 flex flex-col min-h-0">
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <div className="flex items-center gap-2 min-w-0">
                 <Activity className="w-4 h-4 text-cyan-400" />
                 <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Spectrum</span>
+                {activeRefSnapshot ? (
+                  <span className="text-[10px] text-zinc-500 truncate">
+                    Ref {activeRefSlot}: <span className="text-zinc-300">{activeRefSnapshot.name}</span>
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-zinc-600">No reference</span>
+                )}
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="text-[11px] font-mono text-zinc-300 tabular-nums">
+                {hoverInfo ? (
+                  <div className="flex items-center gap-3">
+                    <span className="text-zinc-200">
+                      {formatFreq(hoverInfo.freqHz)}
+                      {hoverInfo.note ? ` ${hoverInfo.note}` : ''}
+                      {hoverInfo.cents != null ? ` ${hoverInfo.cents >= 0 ? '+' : ''}${hoverInfo.cents}c` : ''}
+                    </span>
+                    <span className="text-zinc-400">
+                      {state.view === 'delta'
+                        ? `Δ ${hoverInfo.db >= 0 ? '+' : ''}${hoverInfo.db.toFixed(1)} dB`
+                        : `${hoverInfo.db.toFixed(1)} dB`}
+                    </span>
+                    {state.view !== 'delta' && hoverInfo.deltaDb != null && (
+                      <span className="text-zinc-500">
+                        Δ {hoverInfo.deltaDb >= 0 ? '+' : ''}{hoverInfo.deltaDb.toFixed(1)} dB
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <span className="text-zinc-600">Hover for readout</span>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap">
                 {/* Mode */}
                 <div className="flex rounded-lg overflow-hidden border border-[#27272a]">
                   <button
@@ -1124,14 +2100,114 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
                 {/* Peak Hold */}
                 <button
                   onClick={() => setState(s => ({ ...s, peakHold: !s.peakHold }))}
-                  className={`px-2 py-1 rounded-lg text-[10px] font-medium border ${state.peakHold ? 'border-yellow-500/50 bg-yellow-500/20 text-yellow-400' : 'border-[#27272a] text-zinc-500'}`}
+                  className={`px-2 py-1 rounded-lg text-[10px] font-medium border ${state.peakHold ? 'border-yellow-500/50 bg-yellow-500/20 text-yellow-400' : 'border-[#27272a] text-zinc-500 hover:text-zinc-300'}`}
                 >
                   Hold
                 </button>
               </div>
+
+              <div className="flex items-center gap-2 flex-wrap justify-end">
+                {/* View */}
+                <div className="flex rounded-lg overflow-hidden border border-[#27272a]">
+                  <button
+                    onClick={() => setState(s => ({ ...s, view: 'spectrum' }))}
+                    className={`px-2 py-1 text-[10px] font-medium ${state.view === 'spectrum' ? 'bg-zinc-800 text-zinc-200' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  >
+                    Spec
+                  </button>
+                  <button
+                    onClick={() => setState(s => ({ ...s, view: 'delta' }))}
+                    className={`px-2 py-1 text-[10px] font-medium ${state.view === 'delta' ? 'bg-amber-500/20 text-amber-300' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  >
+                    Δ
+                  </button>
+                </div>
+
+                {/* dB Range */}
+                <div className={`flex rounded-lg overflow-hidden border border-[#27272a] ${state.view === 'delta' ? 'opacity-40' : ''}`}>
+                  {([60, 90, 120] as DbRange[]).map((r) => (
+                    <button
+                      key={r}
+                      onClick={() => setState(s => ({ ...s, dbRange: r }))}
+                      disabled={state.view === 'delta'}
+                      className={`px-2 py-1 text-[10px] font-medium ${state.dbRange === r ? 'bg-zinc-800 text-zinc-200' : 'text-zinc-500 hover:text-zinc-300'} disabled:hover:text-zinc-500`}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Overlays */}
+                <button
+                  onClick={() => setState(s => ({ ...s, showAvg: !s.showAvg }))}
+                  className={`px-2 py-1 rounded-lg text-[10px] font-medium border flex items-center gap-1 ${
+                    state.showAvg ? 'border-green-500/40 bg-green-500/15 text-green-300' : 'border-[#27272a] text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  {state.showAvg ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                  Avg
+                </button>
+                <button
+                  onClick={() => setState(s => ({ ...s, showRef: !s.showRef }))}
+                  className={`px-2 py-1 rounded-lg text-[10px] font-medium border flex items-center gap-1 ${
+                    state.showRef ? 'border-slate-500/40 bg-slate-500/15 text-slate-200' : 'border-[#27272a] text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  {state.showRef ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                  Ref
+                </button>
+
+                {/* Traces */}
+                <div className="flex rounded-lg overflow-hidden border border-[#27272a]">
+                  <button
+                    onClick={() => setState(s => ({ ...s, traces: { ...s.traces, mix: !s.traces.mix } }))}
+                    className={`px-2 py-1 text-[10px] font-medium ${state.traces.mix ? 'bg-cyan-500/20 text-cyan-300' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  >
+                    Mix
+                  </button>
+                  <button
+                    onClick={() => setState(s => ({ ...s, traces: { ...s.traces, l: !s.traces.l } }))}
+                    className={`px-2 py-1 text-[10px] font-medium ${state.traces.l ? 'bg-cyan-500/20 text-cyan-300' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  >
+                    L
+                  </button>
+                  <button
+                    onClick={() => setState(s => ({ ...s, traces: { ...s.traces, r: !s.traces.r } }))}
+                    className={`px-2 py-1 text-[10px] font-medium ${state.traces.r ? 'bg-purple-500/20 text-purple-300' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  >
+                    R
+                  </button>
+                  <button
+                    onClick={() => setState(s => ({ ...s, traces: { ...s.traces, m: !s.traces.m } }))}
+                    className={`px-2 py-1 text-[10px] font-medium ${state.traces.m ? 'bg-green-500/20 text-green-300' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  >
+                    M
+                  </button>
+                  <button
+                    onClick={() => setState(s => ({ ...s, traces: { ...s.traces, s: !s.traces.s } }))}
+                    className={`px-2 py-1 text-[10px] font-medium ${state.traces.s ? 'bg-orange-500/20 text-orange-300' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  >
+                    S
+                  </button>
+                </div>
+
+                {/* Capture Snapshot */}
+                <button
+                  onClick={captureSnapshot}
+                  className="px-2 py-1 rounded-lg text-[10px] font-medium border border-[#27272a] bg-[#18181b] text-zinc-300 hover:bg-[#27272a] hover:text-white transition-colors flex items-center gap-1.5"
+                  title={`Capture snapshot to slot ${activeRefSlot}`}
+                >
+                  <Camera className="w-3 h-3" />
+                  Cap {activeRefSlot}
+                </button>
+              </div>
             </div>
 
-            <div className="flex-1 relative">
+            <div
+              className="flex-1 relative rounded-lg overflow-hidden border border-[#27272a] bg-[#0a0a0b] cursor-crosshair min-h-0"
+              onMouseMove={handleSpectrumMouseMove}
+              onMouseLeave={handleSpectrumMouseLeave}
+            >
               <canvas
                 ref={spectrumCanvasRef}
                 className="absolute inset-0 w-full h-full"
@@ -1140,70 +2216,301 @@ export function AnalyserView({ onBack }: AnalyserViewProps) {
             </div>
           </div>
 
-          {/* Peak/RMS Meters */}
-          <div className="h-48 bg-[#111113] rounded-xl border border-[#27272a] p-4 flex flex-col">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <Gauge className="w-4 h-4 text-green-400" />
-                <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Levels</span>
+          {/* Bottom Row */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:h-72 min-h-0">
+            {/* Levels */}
+            <div className="bg-[#111113] rounded-xl border border-[#27272a] p-4 flex flex-col min-h-0">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Gauge className="w-4 h-4 text-green-400" />
+                  <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Levels</span>
+                </div>
+
+                {/* Weighting */}
+                <div className="flex rounded-lg overflow-hidden border border-[#27272a]">
+                  {(['flat', 'dBA', 'dBC'] as WeightingMode[]).map(w => (
+                    <button
+                      key={w}
+                      onClick={() => setState(s => ({ ...s, weightingMode: w }))}
+                      className={`px-2 py-1 text-[10px] font-medium ${state.weightingMode === w ? 'bg-green-500/20 text-green-400' : 'text-zinc-500 hover:text-zinc-300'}`}
+                    >
+                      {w}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              {/* Weighting */}
-              <div className="flex rounded-lg overflow-hidden border border-[#27272a]">
-                {(['flat', 'dBA', 'dBC'] as WeightingMode[]).map(w => (
-                  <button
-                    key={w}
-                    onClick={() => setState(s => ({ ...s, weightingMode: w }))}
-                    className={`px-2 py-1 text-[10px] font-medium ${state.weightingMode === w ? 'bg-green-500/20 text-green-400' : 'text-zinc-500 hover:text-zinc-300'}`}
-                  >
-                    {w}
-                  </button>
-                ))}
+              <div className="flex-1 grid grid-cols-[minmax(0,1fr)_170px] gap-3 min-h-0">
+                <div className="relative rounded-lg overflow-hidden border border-[#27272a] bg-[#0a0a0b] min-h-0">
+                  <canvas
+                    ref={peakCanvasRef}
+                    className="absolute inset-0 w-full h-full"
+                    style={{ width: '100%', height: '100%' }}
+                  />
+                </div>
+
+                <div className="text-[10px] font-mono text-zinc-300 tabular-nums leading-relaxed">
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-500">Peak</span>
+                    <span>{formatDb(meterStats.leftPeakDb)} / {formatDb(meterStats.rightPeakDb)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-500">TP</span>
+                    <span>{meterStats.leftTruePeakDb.toFixed(1)} / {meterStats.rightTruePeakDb.toFixed(1)} dBTP</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-500">RMS</span>
+                    <span>{formatDb(meterStats.rmsDb)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-500">Crest</span>
+                    <span>{meterStats.crestDb.toFixed(1)} dB</span>
+                  </div>
+                  <div className="h-px bg-[#27272a] my-2" />
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-500">LUFS M</span>
+                    <span>{formatLufs(meterStats.lufsM)} LUFS</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-500">LUFS S</span>
+                    <span>{formatLufs(meterStats.lufsS)} LUFS</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-500">LUFS I</span>
+                    <span>{formatLufs(meterStats.lufsI)} LUFS</span>
+                  </div>
+                  <div className="h-px bg-[#27272a] my-2" />
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-500">DC L/R</span>
+                    <span>{meterStats.dcOffsetL.toFixed(4)} / {meterStats.dcOffsetR.toFixed(4)}</span>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div className="flex-1 relative">
-              <canvas
-                ref={peakCanvasRef}
-                className="absolute inset-0 w-full h-full"
-                style={{ width: '100%', height: '100%' }}
-              />
+            {/* Stereo */}
+            <div className="bg-[#111113] rounded-xl border border-[#27272a] p-4 flex flex-col min-h-0">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Volume2 className="w-4 h-4 text-cyan-400" />
+                  <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Stereo</span>
+                </div>
+                <div className="text-[10px] font-mono text-zinc-500 tabular-nums">
+                  W {Math.round(clamp(meterStats.width, 0, 1) * 100)}% · Corr {clamp(meterStats.correlation, -1, 1).toFixed(2)}
+                </div>
+              </div>
+
+              <div className="h-16 relative rounded-lg overflow-hidden border border-[#27272a] bg-[#0a0a0b] mb-3">
+                <canvas
+                  ref={phaseCanvasRef}
+                  className="absolute inset-0 w-full h-full"
+                  style={{ width: '100%', height: '100%' }}
+                />
+              </div>
+
+              <div className="flex-1 grid grid-cols-2 gap-3 min-h-0">
+                <div className="relative rounded-lg overflow-hidden border border-[#27272a] bg-[#0a0a0b] min-h-0">
+                  <canvas
+                    ref={scopeCanvasRef}
+                    className="absolute inset-0 w-full h-full"
+                    style={{ width: '100%', height: '100%' }}
+                  />
+                </div>
+
+                <div className="flex flex-col min-h-0">
+                  <div className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">
+                    Band Width
+                  </div>
+                  <div className="flex-1 overflow-hidden flex flex-col gap-1">
+                    {stereoBands.length === 0 ? (
+                      <div className="text-xs text-zinc-600">Waiting for signal...</div>
+                    ) : (
+                      stereoBands.map((b) => {
+                        const fill = b.correlation > 0.4 ? '#22c55e' : b.correlation > 0 ? '#f97316' : '#ef4444'
+                        return (
+                          <div key={b.label} className="flex items-center gap-2">
+                            <span className="w-12 text-[10px] font-mono text-zinc-400">{b.label}</span>
+                            <div className="flex-1 h-2 rounded bg-[#18181b] overflow-hidden border border-[#27272a]">
+                              <div className="h-full" style={{ width: `${Math.round(clamp(b.width, 0, 1) * 100)}%`, backgroundColor: fill }} />
+                            </div>
+                            <span className="w-10 text-[10px] font-mono text-zinc-500 text-right tabular-nums">
+                              {Math.round(clamp(b.width, 0, 1) * 100)}%
+                            </span>
+                          </div>
+                        )
+                      })
+                    )}
+                  </div>
+                  <div className="mt-2 text-[10px] text-zinc-600">
+                    Green = mono-safe, red = phase risk.
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Right: Stereo/Phase */}
-        <div className="w-48 flex flex-col gap-4">
-          {/* Phase Correlation */}
-          <div className="flex-1 bg-[#111113] rounded-xl border border-[#27272a] p-4 flex flex-col">
-            <div className="flex items-center gap-2 mb-3">
-              <Radio className="w-4 h-4 text-purple-400" />
-              <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Phase</span>
+        {/* Right: References + Kick */}
+        <div className="w-full lg:w-[360px] flex flex-col gap-4 min-w-0 overflow-hidden">
+          {/* References */}
+          <div className="flex-1 bg-[#111113] rounded-xl border border-[#27272a] p-4 flex flex-col min-h-0">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Camera className="w-4 h-4 text-amber-300" />
+                <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">References</span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="flex rounded-lg overflow-hidden border border-[#27272a]">
+                  <button
+                    onClick={() => setActiveRefSlot('A')}
+                    className={`px-2 py-1 text-[10px] font-medium ${activeRefSlot === 'A' ? 'bg-cyan-500/20 text-cyan-300' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  >
+                    A
+                  </button>
+                  <button
+                    onClick={() => setActiveRefSlot('B')}
+                    className={`px-2 py-1 text-[10px] font-medium ${activeRefSlot === 'B' ? 'bg-purple-500/20 text-purple-300' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  >
+                    B
+                  </button>
+                </div>
+
+                <button
+                  onClick={captureSnapshot}
+                  className="px-2 py-1 rounded-lg text-[10px] font-medium border border-[#27272a] bg-[#18181b] text-zinc-300 hover:bg-[#27272a] hover:text-white transition-colors flex items-center gap-1.5"
+                >
+                  <Camera className="w-3 h-3" />
+                  Capture
+                </button>
+              </div>
             </div>
 
-            <div className="flex-1 relative">
-              <canvas
-                ref={phaseCanvasRef}
-                className="absolute inset-0 w-full h-full"
-                style={{ width: '100%', height: '100%' }}
-              />
+            <div className="grid grid-cols-2 gap-2 mb-3">
+              <div className={`rounded-lg border p-2 ${activeRefSlot === 'A' ? 'border-cyan-500/40 bg-cyan-500/10' : 'border-[#27272a] bg-[#18181b]'}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Slot A</span>
+                  <button
+                    onClick={() => setRefAId(null)}
+                    className="text-zinc-500 hover:text-zinc-300"
+                    title="Clear slot A"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+                <div className="text-xs text-zinc-300 truncate mt-1">{refASnapshot?.name ?? 'Empty'}</div>
+              </div>
+              <div className={`rounded-lg border p-2 ${activeRefSlot === 'B' ? 'border-purple-500/40 bg-purple-500/10' : 'border-[#27272a] bg-[#18181b]'}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Slot B</span>
+                  <button
+                    onClick={() => setRefBId(null)}
+                    className="text-zinc-500 hover:text-zinc-300"
+                    title="Clear slot B"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+                <div className="text-xs text-zinc-300 truncate mt-1">{refBSnapshot?.name ?? 'Empty'}</div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[10px] text-zinc-600">
+                Active ref: <span className="text-zinc-400">{activeRefSnapshot?.name ?? 'None'}</span>
+              </div>
+              <div className="text-[10px] text-zinc-600">{snapshots.length}/30</div>
+            </div>
+
+            <div className="flex-1 overflow-hidden rounded-lg border border-[#27272a] bg-[#0a0a0b]">
+              <div className="h-full overflow-y-auto">
+                {snapshots.length === 0 ? (
+                  <div className="p-3 text-xs text-zinc-500">
+                    Capture snapshots to create A/B references, then switch to Δ view.
+                  </div>
+                ) : (
+                  snapshots.map((s) => (
+                    <div key={s.id} className="px-3 py-2 border-b border-[#27272a]/60 flex items-center gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs text-zinc-200 truncate">{s.name}</div>
+                        <div className="text-[10px] text-zinc-600">{new Date(s.createdAt).toLocaleString()}</div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => assignSnapshot(s.id, 'A')}
+                          className={`px-2 py-1 rounded text-[10px] font-medium border ${
+                            refAId === s.id ? 'border-cyan-500/40 bg-cyan-500/15 text-cyan-200' : 'border-[#27272a] text-zinc-500 hover:text-zinc-300'
+                          }`}
+                          title="Assign to slot A"
+                        >
+                          A
+                        </button>
+                        <button
+                          onClick={() => assignSnapshot(s.id, 'B')}
+                          className={`px-2 py-1 rounded text-[10px] font-medium border ${
+                            refBId === s.id ? 'border-purple-500/40 bg-purple-500/15 text-purple-200' : 'border-[#27272a] text-zinc-500 hover:text-zinc-300'
+                          }`}
+                          title="Assign to slot B"
+                        >
+                          B
+                        </button>
+                        <button
+                          onClick={() => deleteSnapshot(s.id)}
+                          className="p-1 rounded border border-[#27272a] text-zinc-500 hover:text-zinc-200 hover:bg-[#18181b]"
+                          title="Delete snapshot"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           </div>
 
-          {/* Stereo Width */}
-          <div className="h-32 bg-[#111113] rounded-xl border border-[#27272a] p-4 flex flex-col">
-            <div className="flex items-center gap-2 mb-3">
-              <Volume2 className="w-4 h-4 text-cyan-400" />
-              <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Stereo</span>
+          {/* Kick Focus */}
+          <div className="h-52 bg-[#111113] rounded-xl border border-[#27272a] p-4 flex flex-col">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Activity className="w-4 h-4 text-orange-400" />
+                <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Kick Focus</span>
+              </div>
+              <div className="text-[10px] font-mono text-zinc-500 tabular-nums">
+                {meterStats.kickFundHz != null ? `${formatFreq(meterStats.kickFundHz)} ${meterStats.kickNote ?? ''}`.trim() : '--'}
+              </div>
             </div>
 
-            <div className="flex-1 relative">
-              <canvas
-                ref={stereoCanvasRef}
-                className="absolute inset-0 w-full h-full"
-                style={{ width: '100%', height: '100%' }}
-              />
-            </div>
+            {meterStats.kickRatios ? (
+              <div className="flex-1 flex flex-col justify-between">
+                {([
+                  { key: 'sub', label: 'Sub', color: '#06b6d4' },
+                  { key: 'punch', label: 'Punch', color: '#22c55e' },
+                  { key: 'tail', label: 'Tail', color: '#f97316' },
+                ] as const).map((it) => {
+                  const v = meterStats.kickRatios ? meterStats.kickRatios[it.key] : 0
+                  return (
+                    <div key={it.key} className="flex items-center gap-2">
+                      <span className="w-12 text-[10px] font-mono text-zinc-400">{it.label}</span>
+                      <div className="flex-1 h-2 rounded bg-[#18181b] overflow-hidden border border-[#27272a]">
+                        <div className="h-full" style={{ width: `${Math.round(clamp(v, 0, 1) * 100)}%`, backgroundColor: it.color }} />
+                      </div>
+                      <span className="w-10 text-[10px] font-mono text-zinc-500 text-right tabular-nums">
+                        {Math.round(clamp(v, 0, 1) * 100)}%
+                      </span>
+                    </div>
+                  )
+                })}
+                <div className="text-[10px] text-zinc-600 mt-3">
+                  Based on spectrum energy: 20-60Hz (sub), 60-150Hz (punch), 150-400Hz (tail).
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-xs text-zinc-600">
+                Waiting for signal...
+              </div>
+            )}
           </div>
         </div>
       </div>
