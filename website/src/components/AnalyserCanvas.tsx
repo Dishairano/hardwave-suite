@@ -18,24 +18,58 @@ import type {
 import { DISPLAY_BANDS, SPECTRUM_PAD } from '@/lib/analyser/types'
 import { clamp, formatFreq, formatDb, freqToNote, randomId } from '@/lib/analyser/math'
 
+// ─── Preset ─────────────────────────────────────────────────────────────────
+
+interface Preset {
+  id: string
+  name: string
+  config: AnalyserConfig
+}
+
+const STORAGE_CONFIG  = 'hw-analyser-config'
+const STORAGE_PRESETS = 'hw-analyser-presets'
+
+const DEFAULT_CONFIG: AnalyserConfig = {
+  spectrumMode: 'peak',
+  responseTime: 'medium',
+  tiltMode: 'off',
+  weightingMode: 'flat',
+  frozen: false,
+  peakHold: true,
+  view: 'spectrum',
+  dbRange: 90,
+  showAvg: true,
+  showRef: true,
+  traces: { mix: true, l: false, r: false, m: false, s: false },
+}
+
+function loadConfig(): AnalyserConfig {
+  try {
+    const s = localStorage.getItem(STORAGE_CONFIG)
+    if (s) return { ...DEFAULT_CONFIG, ...JSON.parse(s), frozen: false }
+  } catch {}
+  return DEFAULT_CONFIG
+}
+
+function loadPresets(): Preset[] {
+  try {
+    const s = localStorage.getItem(STORAGE_PRESETS)
+    if (s) return JSON.parse(s)
+  } catch {}
+  return []
+}
+
+// ─── Component ──────────────────────────────────────────────────────────────
+
 interface AnalyserCanvasProps {
   vstMode?: boolean
 }
 
 export function AnalyserCanvas({ vstMode = false }: AnalyserCanvasProps) {
-  const [config, setConfig] = useState<AnalyserConfig>({
-    spectrumMode: 'peak',
-    responseTime: 'medium',
-    tiltMode: 'off',
-    weightingMode: 'flat',
-    frozen: false,
-    peakHold: true,
-    view: 'spectrum',
-    dbRange: 90,
-    showAvg: true,
-    showRef: true,
-    traces: { mix: true, l: false, r: false, m: false, s: false },
-  })
+  const [config, setConfig] = useState<AnalyserConfig>(DEFAULT_CONFIG)
+  const [showSettings, setShowSettings] = useState(false)
+  const [presets, setPresets] = useState<Preset[]>([])
+  const [presetName, setPresetName] = useState('')
 
   const [meterStats, setMeterStats] = useState<MeterStats>({
     leftPeakDb: -100, rightPeakDb: -100,
@@ -57,89 +91,89 @@ export function AnalyserCanvas({ vstMode = false }: AnalyserCanvasProps) {
   const [activeBottomTab, setActiveBottomTab] = useState<'levels' | 'stereo' | 'kick'>('levels')
 
   // Refs
-  const engineRef = useRef<AnalyserEngine | null>(null)
-  const rendererRef = useRef<AnalyserRenderer | null>(null)
+  const engineRef    = useRef<AnalyserEngine | null>(null)
+  const rendererRef  = useRef<AnalyserRenderer | null>(null)
   const spectrumCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const phaseCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const peakCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const scopeCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const animationRef = useRef<number | null>(null)
-  const latestPacketRef = useRef<AudioPacket | null>(null)
-  const configRef = useRef(config)
-  const hoverRef = useRef<{ active: boolean; x: number; y: number; band: number } | null>(null)
+  const phaseCanvasRef    = useRef<HTMLCanvasElement | null>(null)
+  const peakCanvasRef     = useRef<HTMLCanvasElement | null>(null)
+  const scopeCanvasRef    = useRef<HTMLCanvasElement | null>(null)
+  const animationRef      = useRef<number | null>(null)
+  const latestPacketRef   = useRef<AudioPacket | null>(null)
+  const configRef         = useRef(config)
+  const hoverRef          = useRef<{ active: boolean; x: number; y: number; band: number } | null>(null)
   const activeRefTraceRef = useRef<Float32Array | null>(null)
-  const activeRefNameRef = useRef<string | null>(null)
-  const lastStatsRef = useRef(0)
+  const activeRefNameRef  = useRef<string | null>(null)
+  const lastStatsRef      = useRef(0)
+  const importRef         = useRef<HTMLInputElement | null>(null)
 
   configRef.current = config
 
-  // Initialize engine + renderer
+  // ── Load from localStorage once on mount ──────────────────────────────────
   useEffect(() => {
-    engineRef.current = new AnalyserEngine()
+    setConfig(loadConfig())
+    setPresets(loadPresets())
+  }, [])
+
+  // ── Persist config (debounced 400 ms) ─────────────────────────────────────
+  useEffect(() => {
+    const t = setTimeout(() => {
+      localStorage.setItem(STORAGE_CONFIG, JSON.stringify(config))
+    }, 400)
+    return () => clearTimeout(t)
+  }, [config])
+
+  // ── Persist presets ───────────────────────────────────────────────────────
+  useEffect(() => {
+    localStorage.setItem(STORAGE_PRESETS, JSON.stringify(presets))
+  }, [presets])
+
+  // ── Engine + renderer init ────────────────────────────────────────────────
+  useEffect(() => {
+    engineRef.current   = new AnalyserEngine()
     rendererRef.current = new AnalyserRenderer()
   }, [])
 
-  // Register global callback for VST data injection
+  // ── VST packet callback ───────────────────────────────────────────────────
   useEffect(() => {
     const handler = (packet: AudioPacket) => {
       latestPacketRef.current = packet
       if (!hasData) setHasData(true)
     }
-
-    // The VST (wry) calls window.__onAudioPacket({...})
     ;(window as any).__onAudioPacket = handler
-    return () => {
-      delete (window as any).__onAudioPacket
-    }
+    return () => { delete (window as any).__onAudioPacket }
   }, [hasData])
 
-  // Keep active ref trace in sync
+  // ── Sync active ref trace ─────────────────────────────────────────────────
   useEffect(() => {
     const activeId = activeRefSlot === 'A' ? refAId : refBId
     const snap = activeId ? snapshots.find(s => s.id === activeId) : null
     activeRefTraceRef.current = snap ? snap.trace : null
-    activeRefNameRef.current = snap ? snap.name : null
+    activeRefNameRef.current  = snap ? snap.name  : null
   }, [snapshots, refAId, refBId, activeRefSlot])
 
-  // Main render loop
+  // ── Main render loop ──────────────────────────────────────────────────────
   useEffect(() => {
     const loop = () => {
-      const engine = engineRef.current
+      const engine   = engineRef.current
       const renderer = rendererRef.current
-      if (!engine || !renderer) {
-        animationRef.current = requestAnimationFrame(loop)
-        return
-      }
+      if (!engine || !renderer) { animationRef.current = requestAnimationFrame(loop); return }
 
-      // Process latest packet
       const packet = latestPacketRef.current
       if (packet) {
         engine.processPacket(packet, configRef.current)
         latestPacketRef.current = null
       }
 
-      // Draw canvases
-      if (spectrumCanvasRef.current) {
-        renderer.drawSpectrum(
-          spectrumCanvasRef.current,
-          engine,
-          configRef.current,
-          activeRefTraceRef.current,
-          activeRefNameRef.current,
-          hoverRef.current,
-        )
-      }
-      if (phaseCanvasRef.current) {
+      if (spectrumCanvasRef.current)
+        renderer.drawSpectrum(spectrumCanvasRef.current, engine, configRef.current,
+          activeRefTraceRef.current, activeRefNameRef.current, hoverRef.current)
+      if (phaseCanvasRef.current)
         renderer.drawPhase(phaseCanvasRef.current, engine.meters.correlation)
-      }
-      if (peakCanvasRef.current) {
+      if (peakCanvasRef.current)
         renderer.drawPeakMeters(peakCanvasRef.current, engine, configRef.current.peakHold)
-      }
-      if (scopeCanvasRef.current) {
+      if (scopeCanvasRef.current)
         renderer.drawScope(scopeCanvasRef.current)
-      }
 
-      // Update React state at lower rate
       const now = performance.now()
       if (now - lastStatsRef.current > 150) {
         lastStatsRef.current = now
@@ -149,40 +183,30 @@ export function AnalyserCanvas({ vstMode = false }: AnalyserCanvasProps) {
 
       animationRef.current = requestAnimationFrame(loop)
     }
-
     animationRef.current = requestAnimationFrame(loop)
-    return () => {
-      if (animationRef.current) cancelAnimationFrame(animationRef.current)
-    }
+    return () => { if (animationRef.current) cancelAnimationFrame(animationRef.current) }
   }, [])
 
-  // Handlers
+  // ── Handlers ──────────────────────────────────────────────────────────────
   const handleSpectrumMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect()
-    const x = clamp(e.clientX - rect.left, 0, rect.width)
-    const y = clamp(e.clientY - rect.top, 0, rect.height)
+    const rect  = e.currentTarget.getBoundingClientRect()
+    const x     = clamp(e.clientX - rect.left, 0, rect.width)
+    const y     = clamp(e.clientY - rect.top,  0, rect.height)
     const plotW = Math.max(1, rect.width - SPECTRUM_PAD.left - SPECTRUM_PAD.right)
     const xPlot = clamp(x - SPECTRUM_PAD.left, 0, plotW)
-    const band = clamp(Math.round((xPlot / plotW) * (DISPLAY_BANDS - 1)), 0, DISPLAY_BANDS - 1)
+    const band  = clamp(Math.round((xPlot / plotW) * (DISPLAY_BANDS - 1)), 0, DISPLAY_BANDS - 1)
     hoverRef.current = { active: true, x, y, band }
 
     const engine = engineRef.current
     if (engine) {
-      const freq = engine.bandFreqs[band]
-      const note = freqToNote(freq)
-      const mix = engine.traces.mix
-      const ref = activeRefTraceRef.current
+      const freq   = engine.bandFreqs[band]
+      const note   = freqToNote(freq)
+      const mix    = engine.traces.mix
+      const ref    = activeRefTraceRef.current
       const baseDb = mix[band]
-      const delta = ref ? (baseDb - ref[band]) : null
-      const db = configRef.current.view === 'delta' ? (delta ?? 0) : baseDb
-
-      setHoverInfo({
-        freqHz: freq,
-        db,
-        note: note?.note ?? null,
-        cents: note?.cents ?? null,
-        deltaDb: configRef.current.view === 'delta' ? null : delta,
-      })
+      const delta  = ref ? (baseDb - ref[band]) : null
+      const db     = configRef.current.view === 'delta' ? (delta ?? 0) : baseDb
+      setHoverInfo({ freqHz: freq, db, note: note?.note ?? null, cents: note?.cents ?? null, deltaDb: configRef.current.view === 'delta' ? null : delta })
     }
   }, [])
 
@@ -215,23 +239,72 @@ export function AnalyserCanvas({ vstMode = false }: AnalyserCanvasProps) {
     else setRefBId(id)
   }, [])
 
-  const resetMeters = useCallback(() => {
-    engineRef.current?.reset()
+  const resetMeters = useCallback(() => { engineRef.current?.reset() }, [])
+
+  // ── Preset handlers ───────────────────────────────────────────────────────
+  const savePreset = useCallback(() => {
+    const name = presetName.trim() || `Preset ${new Date().toLocaleTimeString()}`
+    const preset: Preset = { id: randomId('preset'), name, config: { ...configRef.current } }
+    setPresets(prev => [...prev, preset])
+    setPresetName('')
+  }, [presetName])
+
+  const deletePreset = useCallback((id: string) => {
+    setPresets(prev => prev.filter(p => p.id !== id))
   }, [])
 
-  const formatLufs = (value: number | null): string => {
-    if (value == null || !Number.isFinite(value)) return '--'
-    return value.toFixed(1)
-  }
+  const loadPreset = useCallback((preset: Preset) => {
+    setConfig({ ...preset.config, frozen: false })
+  }, [])
 
-  const activeRefId = activeRefSlot === 'A' ? refAId : refBId
+  const exportPresets = useCallback(() => {
+    const blob = new Blob([JSON.stringify(presets, null, 2)], { type: 'application/json' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href = url
+    a.download = 'hardwave-analyser-presets.json'
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [presets])
+
+  const handleImportFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = ev => {
+      try {
+        const data = JSON.parse(ev.target?.result as string)
+        if (Array.isArray(data)) {
+          setPresets(prev => {
+            const existing = new Set(prev.map(p => p.id))
+            return [...prev, ...data.filter((p: Preset) => p.id && p.name && p.config && !existing.has(p.id))]
+          })
+        }
+      } catch {}
+    }
+    reader.readAsText(file)
+    e.target.value = ''
+  }, [])
+
+  const formatLufs = (value: number | null): string =>
+    (value == null || !Number.isFinite(value)) ? '--' : value.toFixed(1)
+
+  const activeRefId       = activeRefSlot === 'A' ? refAId : refBId
   const activeRefSnapshot = activeRefId ? snapshots.find(s => s.id === activeRefId) : null
-  const refASnapshot = refAId ? snapshots.find(s => s.id === refAId) : null
-  const refBSnapshot = refBId ? snapshots.find(s => s.id === refBId) : null
+  const refASnapshot      = refAId ? snapshots.find(s => s.id === refAId) : null
+  const refBSnapshot      = refBId ? snapshots.find(s => s.id === refBId) : null
 
+  // ── Shared button class helpers ───────────────────────────────────────────
+  const segBtn  = (active: boolean, color = 'cyan') =>
+    `px-2 py-0.5 text-[10px] font-medium transition-colors ${active ? `bg-${color}-500/20 text-${color}-400` : 'text-zinc-500 hover:text-zinc-300'}`
+  const toggleBtn = (active: boolean, color = 'cyan') =>
+    `px-2 py-0.5 rounded-md text-[10px] font-medium border transition-colors ${active ? `border-${color}-500/50 bg-${color}-500/20 text-${color}-400` : 'border-[#27272a] text-zinc-500 hover:text-zinc-300'}`
+
+  // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="flex-1 flex flex-col bg-[#0a0a0b] overflow-hidden h-full">
-      {/* Toolbar */}
+
+      {/* ── Toolbar ────────────────────────────────────────────────────── */}
       <div className="h-12 bg-[#111113] border-b border-[#27272a]/50 flex items-center px-4 gap-3 shrink-0">
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 rounded-md bg-gradient-to-br from-orange-500 to-green-500 flex items-center justify-center">
@@ -242,34 +315,203 @@ export function AnalyserCanvas({ vstMode = false }: AnalyserCanvasProps) {
 
         <div className="flex-1" />
 
-        {/* Data status */}
-        <div className={`px-2 py-1 rounded-md text-[10px] font-medium flex items-center gap-1.5 ${hasData ? 'bg-green-500/20 text-green-400' : 'bg-zinc-800 text-zinc-500'}`}>
-          <div className={`w-1.5 h-1.5 rounded-full ${hasData ? 'bg-green-400 animate-pulse' : 'bg-zinc-600'}`} />
-          {hasData ? 'Receiving' : 'Waiting for data...'}
+        {/* Quick controls always visible in toolbar */}
+        <div className="flex items-center gap-1.5">
+          <button onClick={() => setConfig(s => ({ ...s, frozen: !s.frozen }))}
+            className={toggleBtn(config.frozen)}
+          >Freeze</button>
+
+          <button onClick={resetMeters}
+            className="px-2 py-1 rounded-md text-[10px] font-medium bg-[#18181b] text-zinc-400 hover:bg-[#27272a] hover:text-white transition-colors"
+          >Reset</button>
         </div>
 
-        {/* Freeze */}
-        <button
-          onClick={() => setConfig(s => ({ ...s, frozen: !s.frozen }))}
-          className={`px-2 py-1 rounded-md text-[10px] font-medium ${config.frozen ? 'bg-cyan-500/20 text-cyan-400' : 'bg-[#18181b] text-zinc-400 hover:bg-[#27272a]'}`}
-        >
-          Freeze
-        </button>
+        {/* Signal status */}
+        <div className={`px-2 py-1 rounded-md text-[10px] font-medium flex items-center gap-1.5 ${hasData ? 'bg-green-500/20 text-green-400' : 'bg-zinc-800 text-zinc-500'}`}>
+          <div className={`w-1.5 h-1.5 rounded-full ${hasData ? 'bg-green-400 animate-pulse' : 'bg-zinc-600'}`} />
+          {hasData ? 'Receiving' : 'Waiting...'}
+        </div>
 
-        {/* Reset */}
+        {/* Settings toggle */}
         <button
-          onClick={resetMeters}
-          className="px-2 py-1 rounded-md text-[10px] font-medium bg-[#18181b] text-zinc-400 hover:bg-[#27272a] hover:text-white"
+          onClick={() => setShowSettings(s => !s)}
+          className={`p-1.5 rounded-md text-[10px] font-medium border transition-colors ${showSettings ? 'border-cyan-500/50 bg-cyan-500/15 text-cyan-400' : 'border-[#27272a] text-zinc-400 hover:bg-[#27272a] hover:text-white'}`}
+          title="Settings"
         >
-          Reset
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M4.93 19.07l1.41-1.41M19.07 19.07l-1.41-1.41M12 2v2M12 20v2M2 12h2M20 12h2"/>
+          </svg>
         </button>
       </div>
 
-      {/* Main content */}
+      {/* ── Settings panel ─────────────────────────────────────────────── */}
+      {showSettings && (
+        <div className="bg-[#0e0e10] border-b border-[#27272a] px-4 py-3 shrink-0">
+          <div className="grid grid-cols-[auto_auto_auto_1fr] gap-x-6 gap-y-0 items-start">
+
+            {/* ▸ Spectrum */}
+            <div className="flex flex-col gap-2">
+              <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Spectrum</span>
+              <div>
+                <div className="text-[9px] text-zinc-600 mb-0.5">Mode</div>
+                <div className="flex rounded-md overflow-hidden border border-[#27272a]">
+                  {(['peak', 'rms'] as const).map(m => (
+                    <button key={m} onClick={() => setConfig(s => ({ ...s, spectrumMode: m }))}
+                      className={segBtn(config.spectrumMode === m)}
+                    >{m.toUpperCase()}</button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="text-[9px] text-zinc-600 mb-0.5">Response</div>
+                <div className="flex rounded-md overflow-hidden border border-[#27272a]">
+                  {(['fast', 'medium', 'slow'] as ResponseTime[]).map(rt => (
+                    <button key={rt} onClick={() => setConfig(s => ({ ...s, responseTime: rt }))}
+                      className={segBtn(config.responseTime === rt, 'purple')}
+                    >{rt === 'medium' ? 'Med' : rt.charAt(0).toUpperCase() + rt.slice(1)}</button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="text-[9px] text-zinc-600 mb-0.5">Tilt (↑ low / ↓ high)</div>
+                <div className="flex rounded-md overflow-hidden border border-[#27272a]">
+                  {(['off', '-3dB', '-4.5dB'] as TiltMode[]).map(t => (
+                    <button key={t} onClick={() => setConfig(s => ({ ...s, tiltMode: t }))}
+                      className={segBtn(config.tiltMode === t, 'orange')}
+                    >{t === 'off' ? 'Flat' : t}</button>
+                  ))}
+                </div>
+              </div>
+              <button onClick={() => setConfig(s => ({ ...s, peakHold: !s.peakHold }))}
+                className={toggleBtn(config.peakHold, 'yellow')}
+              >Peak Hold</button>
+            </div>
+
+            {/* ▸ Display */}
+            <div className="flex flex-col gap-2">
+              <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Display</span>
+              <div>
+                <div className="text-[9px] text-zinc-600 mb-0.5">View</div>
+                <div className="flex rounded-md overflow-hidden border border-[#27272a]">
+                  <button onClick={() => setConfig(s => ({ ...s, view: 'spectrum' }))}
+                    className={segBtn(config.view === 'spectrum')}
+                  >Spectrum</button>
+                  <button onClick={() => setConfig(s => ({ ...s, view: 'delta' }))}
+                    className={segBtn(config.view === 'delta', 'amber')}
+                  >Δ Delta</button>
+                </div>
+              </div>
+              <div>
+                <div className="text-[9px] text-zinc-600 mb-0.5">dB Range</div>
+                <div className={`flex rounded-md overflow-hidden border border-[#27272a] ${config.view === 'delta' ? 'opacity-40 pointer-events-none' : ''}`}>
+                  {([60, 90, 120] as DbRange[]).map(r => (
+                    <button key={r} onClick={() => setConfig(s => ({ ...s, dbRange: r }))}
+                      className={segBtn(config.dbRange === r)}
+                    >{r} dB</button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="text-[9px] text-zinc-600 mb-0.5">Weighting</div>
+                <div className="flex rounded-md overflow-hidden border border-[#27272a]">
+                  {(['flat', 'dBA', 'dBC'] as WeightingMode[]).map(w => (
+                    <button key={w} onClick={() => setConfig(s => ({ ...s, weightingMode: w }))}
+                      className={segBtn(config.weightingMode === w, 'green')}
+                    >{w}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex gap-1.5">
+                <button onClick={() => setConfig(s => ({ ...s, showAvg: !s.showAvg }))}
+                  className={toggleBtn(config.showAvg, 'green')}
+                >Avg overlay</button>
+                <button onClick={() => setConfig(s => ({ ...s, showRef: !s.showRef }))}
+                  className={toggleBtn(config.showRef)}
+                >Ref overlay</button>
+              </div>
+            </div>
+
+            {/* ▸ Traces */}
+            <div className="flex flex-col gap-2">
+              <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Traces</span>
+              <div className="flex flex-col gap-1.5">
+                {(['mix', 'l', 'r', 'm', 's'] as const).map(id => {
+                  const colors: Record<string, string> = { mix: 'cyan', l: 'cyan', r: 'purple', m: 'green', s: 'orange' }
+                  const labels: Record<string, string> = { mix: 'Mix', l: 'Left', r: 'Right', m: 'Mid', s: 'Side' }
+                  return (
+                    <button key={id}
+                      onClick={() => setConfig(s => ({ ...s, traces: { ...s.traces, [id]: !s.traces[id] } }))}
+                      className={toggleBtn(config.traces[id], colors[id])}
+                    >{labels[id]}</button>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* ▸ Presets */}
+            <div className="flex flex-col gap-2 min-w-0">
+              <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Presets</span>
+
+              {/* Save row */}
+              <div className="flex gap-1.5">
+                <input
+                  type="text"
+                  value={presetName}
+                  onChange={e => setPresetName(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') savePreset() }}
+                  placeholder="Preset name…"
+                  className="flex-1 min-w-0 px-2 py-0.5 rounded-md bg-[#18181b] border border-[#27272a] text-[10px] text-zinc-200 placeholder-zinc-600 outline-none focus:border-cyan-500/50"
+                />
+                <button onClick={savePreset}
+                  className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-500/30 transition-colors"
+                >Save</button>
+              </div>
+
+              {/* Preset list */}
+              <div className="flex flex-col gap-0.5 max-h-32 overflow-y-auto">
+                {presets.length === 0 ? (
+                  <div className="text-[10px] text-zinc-600">No presets saved yet.</div>
+                ) : presets.map(p => (
+                  <div key={p.id} className="flex items-center gap-1 group">
+                    <button onClick={() => loadPreset(p)}
+                      className="flex-1 min-w-0 text-left px-2 py-0.5 rounded text-[10px] text-zinc-300 hover:text-white hover:bg-[#27272a] truncate transition-colors"
+                      title={`Load preset: ${p.name}`}
+                    >{p.name}</button>
+                    <button onClick={() => deletePreset(p.id)}
+                      className="p-0.5 rounded text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                      title="Delete preset"
+                    >
+                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {/* Export / Import */}
+              <div className="flex gap-1.5 mt-auto pt-1">
+                <button onClick={exportPresets} disabled={presets.length === 0}
+                  className="px-2 py-0.5 rounded-md text-[10px] font-medium border border-[#27272a] text-zinc-400 hover:text-white hover:bg-[#27272a] disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                  title="Export presets as JSON"
+                >↓ Export</button>
+                <button onClick={() => importRef.current?.click()}
+                  className="px-2 py-0.5 rounded-md text-[10px] font-medium border border-[#27272a] text-zinc-400 hover:text-white hover:bg-[#27272a] transition-colors"
+                  title="Import presets from JSON"
+                >↑ Import</button>
+                <input ref={importRef} type="file" accept=".json,application/json" className="hidden" onChange={handleImportFile} />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Main content ────────────────────────────────────────────────── */}
       <div className="flex-1 grid grid-cols-[minmax(0,1fr)_280px] grid-rows-[1fr] gap-3 overflow-hidden p-3">
+
         {/* Left column */}
         <div className="flex flex-col gap-3 min-w-0 overflow-hidden">
-          {/* Spectrum */}
+
+          {/* Spectrum card */}
           <div className="flex-1 bg-[#111113] rounded-xl border border-[#27272a] p-3 flex flex-col min-h-0">
             <div className="flex items-center justify-between gap-2 mb-2">
               <div className="flex items-center gap-2 min-w-0">
@@ -293,108 +535,18 @@ export function AnalyserCanvas({ vstMode = false }: AnalyserCanvasProps) {
                     </span>
                     <span className="text-zinc-400">
                       {config.view === 'delta'
-                        ? `\u0394 ${hoverInfo.db >= 0 ? '+' : ''}${hoverInfo.db.toFixed(1)} dB`
+                        ? `Δ ${hoverInfo.db >= 0 ? '+' : ''}${hoverInfo.db.toFixed(1)} dB`
                         : `${hoverInfo.db.toFixed(1)} dB`}
                     </span>
                     {config.view !== 'delta' && hoverInfo.deltaDb != null && (
                       <span className="text-zinc-500">
-                        \u0394 {hoverInfo.deltaDb >= 0 ? '+' : ''}{hoverInfo.deltaDb.toFixed(1)} dB
+                        Δ {hoverInfo.deltaDb >= 0 ? '+' : ''}{hoverInfo.deltaDb.toFixed(1)} dB
                       </span>
                     )}
                   </div>
                 ) : (
                   <span className="text-zinc-600">Hover for readout</span>
                 )}
-              </div>
-            </div>
-
-            {/* Controls row */}
-            <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                {/* Mode */}
-                <div className="flex rounded-md overflow-hidden border border-[#27272a]">
-                  <button
-                    onClick={() => setConfig(s => ({ ...s, spectrumMode: 'peak' }))}
-                    className={`px-2 py-0.5 text-[10px] font-medium ${config.spectrumMode === 'peak' ? 'bg-cyan-500/20 text-cyan-400' : 'text-zinc-500 hover:text-zinc-300'}`}
-                  >Peak</button>
-                  <button
-                    onClick={() => setConfig(s => ({ ...s, spectrumMode: 'rms' }))}
-                    className={`px-2 py-0.5 text-[10px] font-medium ${config.spectrumMode === 'rms' ? 'bg-cyan-500/20 text-cyan-400' : 'text-zinc-500 hover:text-zinc-300'}`}
-                  >RMS</button>
-                </div>
-
-                {/* Response */}
-                <div className="flex rounded-md overflow-hidden border border-[#27272a]">
-                  {(['fast', 'medium', 'slow'] as ResponseTime[]).map(rt => (
-                    <button key={rt} onClick={() => setConfig(s => ({ ...s, responseTime: rt }))}
-                      className={`px-2 py-0.5 text-[10px] font-medium capitalize ${config.responseTime === rt ? 'bg-purple-500/20 text-purple-400' : 'text-zinc-500 hover:text-zinc-300'}`}
-                    >{rt}</button>
-                  ))}
-                </div>
-
-                {/* Tilt */}
-                <div className="flex rounded-md overflow-hidden border border-[#27272a]">
-                  {(['off', '-3dB', '-4.5dB'] as TiltMode[]).map(tilt => (
-                    <button key={tilt} onClick={() => setConfig(s => ({ ...s, tiltMode: tilt }))}
-                      className={`px-2 py-0.5 text-[10px] font-medium ${config.tiltMode === tilt ? 'bg-orange-500/20 text-orange-400' : 'text-zinc-500 hover:text-zinc-300'}`}
-                    >{tilt === 'off' ? 'Flat' : tilt}</button>
-                  ))}
-                </div>
-
-                {/* Peak Hold */}
-                <button
-                  onClick={() => setConfig(s => ({ ...s, peakHold: !s.peakHold }))}
-                  className={`px-2 py-0.5 rounded-md text-[10px] font-medium border ${config.peakHold ? 'border-yellow-500/50 bg-yellow-500/20 text-yellow-400' : 'border-[#27272a] text-zinc-500 hover:text-zinc-300'}`}
-                >Hold</button>
-              </div>
-
-              <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                {/* View */}
-                <div className="flex rounded-md overflow-hidden border border-[#27272a]">
-                  <button onClick={() => setConfig(s => ({ ...s, view: 'spectrum' }))}
-                    className={`px-2 py-0.5 text-[10px] font-medium ${config.view === 'spectrum' ? 'bg-zinc-800 text-zinc-200' : 'text-zinc-500 hover:text-zinc-300'}`}
-                  >Spec</button>
-                  <button onClick={() => setConfig(s => ({ ...s, view: 'delta' }))}
-                    className={`px-2 py-0.5 text-[10px] font-medium ${config.view === 'delta' ? 'bg-amber-500/20 text-amber-300' : 'text-zinc-500 hover:text-zinc-300'}`}
-                  >\u0394</button>
-                </div>
-
-                {/* dB Range */}
-                <div className={`flex rounded-md overflow-hidden border border-[#27272a] ${config.view === 'delta' ? 'opacity-40' : ''}`}>
-                  {([60, 90, 120] as DbRange[]).map(r => (
-                    <button key={r} onClick={() => setConfig(s => ({ ...s, dbRange: r }))} disabled={config.view === 'delta'}
-                      className={`px-2 py-0.5 text-[10px] font-medium ${config.dbRange === r ? 'bg-zinc-800 text-zinc-200' : 'text-zinc-500 hover:text-zinc-300'} disabled:hover:text-zinc-500`}
-                    >{r}</button>
-                  ))}
-                </div>
-
-                {/* Overlays */}
-                <button onClick={() => setConfig(s => ({ ...s, showAvg: !s.showAvg }))}
-                  className={`px-2 py-0.5 rounded-md text-[10px] font-medium border ${config.showAvg ? 'border-green-500/40 bg-green-500/15 text-green-300' : 'border-[#27272a] text-zinc-500 hover:text-zinc-300'}`}
-                >Avg</button>
-                <button onClick={() => setConfig(s => ({ ...s, showRef: !s.showRef }))}
-                  className={`px-2 py-0.5 rounded-md text-[10px] font-medium border ${config.showRef ? 'border-slate-500/40 bg-slate-500/15 text-slate-200' : 'border-[#27272a] text-zinc-500 hover:text-zinc-300'}`}
-                >Ref</button>
-
-                {/* Traces */}
-                <div className="flex rounded-md overflow-hidden border border-[#27272a]">
-                  {(['mix', 'l', 'r', 'm', 's'] as const).map(id => {
-                    const colors: Record<string, string> = { mix: 'cyan', l: 'cyan', r: 'purple', m: 'green', s: 'orange' }
-                    const c = colors[id]
-                    return (
-                      <button key={id}
-                        onClick={() => setConfig(s => ({ ...s, traces: { ...s.traces, [id]: !s.traces[id] } }))}
-                        className={`px-2 py-0.5 text-[10px] font-medium ${config.traces[id] ? `bg-${c}-500/20 text-${c}-300` : 'text-zinc-500 hover:text-zinc-300'}`}
-                      >{id.toUpperCase()}</button>
-                    )
-                  })}
-                </div>
-
-                {/* Capture */}
-                <button onClick={captureSnapshot}
-                  className="px-2 py-0.5 rounded-md text-[10px] font-medium border border-[#27272a] bg-[#18181b] text-zinc-300 hover:bg-[#27272a] hover:text-white"
-                  title={`Capture snapshot to slot ${activeRefSlot}`}
-                >Cap {activeRefSlot}</button>
               </div>
             </div>
 
@@ -410,7 +562,6 @@ export function AnalyserCanvas({ vstMode = false }: AnalyserCanvasProps) {
 
           {/* Bottom tabs: Levels / Stereo / Kick Focus */}
           <div className="h-52 bg-[#111113] rounded-xl border border-[#27272a] flex flex-col shrink-0">
-            {/* Tab bar */}
             <div className="flex items-center border-b border-[#27272a] px-3 shrink-0">
               {(['levels', 'stereo', 'kick'] as const).map(tab => (
                 <button key={tab} onClick={() => setActiveBottomTab(tab)}
@@ -421,11 +572,12 @@ export function AnalyserCanvas({ vstMode = false }: AnalyserCanvasProps) {
                   }`}
                 >{tab === 'levels' ? 'Levels' : tab === 'stereo' ? 'Stereo' : 'Kick Focus'}</button>
               ))}
+
               {activeBottomTab === 'levels' && (
                 <div className="ml-auto flex rounded-md overflow-hidden border border-[#27272a]">
                   {(['flat', 'dBA', 'dBC'] as WeightingMode[]).map(w => (
                     <button key={w} onClick={() => setConfig(s => ({ ...s, weightingMode: w }))}
-                      className={`px-2 py-0.5 text-[10px] font-medium ${config.weightingMode === w ? 'bg-green-500/20 text-green-400' : 'text-zinc-500 hover:text-zinc-300'}`}
+                      className={segBtn(config.weightingMode === w, 'green')}
                     >{w}</button>
                   ))}
                 </div>
@@ -442,7 +594,6 @@ export function AnalyserCanvas({ vstMode = false }: AnalyserCanvasProps) {
               )}
             </div>
 
-            {/* Tab content — all panels stay mounted so canvas refs remain valid */}
             <div className="flex-1 min-h-0 overflow-hidden">
               <div className={`h-full p-3 ${activeBottomTab === 'levels' ? 'grid grid-cols-[minmax(0,1fr)_150px] gap-2' : 'hidden'}`}>
                 <div className="relative rounded-lg overflow-hidden border border-[#27272a] bg-[#0a0a0b]">
@@ -474,20 +625,18 @@ export function AnalyserCanvas({ vstMode = false }: AnalyserCanvasProps) {
                   <div className="flex-1 overflow-hidden flex flex-col gap-0.5">
                     {stereoBands.length === 0 ? (
                       <div className="text-xs text-zinc-600">Waiting for signal...</div>
-                    ) : (
-                      stereoBands.map(b => {
-                        const fill = b.correlation > 0.4 ? '#22c55e' : b.correlation > 0 ? '#f97316' : '#ef4444'
-                        return (
-                          <div key={b.label} className="flex items-center gap-1.5">
-                            <span className="w-11 text-[10px] font-mono text-zinc-400">{b.label}</span>
-                            <div className="flex-1 h-1.5 rounded bg-[#18181b] overflow-hidden border border-[#27272a]">
-                              <div className="h-full" style={{ width: `${Math.round(clamp(b.width, 0, 1) * 100)}%`, backgroundColor: fill }} />
-                            </div>
-                            <span className="w-8 text-[9px] font-mono text-zinc-500 text-right tabular-nums">{Math.round(clamp(b.width, 0, 1) * 100)}%</span>
+                    ) : stereoBands.map(b => {
+                      const fill = b.correlation > 0.4 ? '#22c55e' : b.correlation > 0 ? '#f97316' : '#ef4444'
+                      return (
+                        <div key={b.label} className="flex items-center gap-1.5">
+                          <span className="w-11 text-[10px] font-mono text-zinc-400">{b.label}</span>
+                          <div className="flex-1 h-1.5 rounded bg-[#18181b] overflow-hidden border border-[#27272a]">
+                            <div className="h-full" style={{ width: `${Math.round(clamp(b.width, 0, 1) * 100)}%`, backgroundColor: fill }} />
                           </div>
-                        )
-                      })
-                    )}
+                          <span className="w-8 text-[9px] font-mono text-zinc-500 text-right tabular-nums">{Math.round(clamp(b.width, 0, 1) * 100)}%</span>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               </div>
@@ -496,9 +645,9 @@ export function AnalyserCanvas({ vstMode = false }: AnalyserCanvasProps) {
                 {meterStats.kickRatios ? (
                   <div className="flex flex-col gap-3">
                     {([
-                      { key: 'sub' as const, label: 'Sub', color: '#06b6d4' },
+                      { key: 'sub' as const, label: 'Sub',   color: '#06b6d4' },
                       { key: 'punch' as const, label: 'Punch', color: '#22c55e' },
-                      { key: 'tail' as const, label: 'Tail', color: '#f97316' },
+                      { key: 'tail' as const, label: 'Tail',  color: '#f97316' },
                     ]).map(it => {
                       const v = meterStats.kickRatios ? meterStats.kickRatios[it.key] : 0
                       return (
@@ -512,7 +661,7 @@ export function AnalyserCanvas({ vstMode = false }: AnalyserCanvasProps) {
                       )
                     })}
                     <div className="text-[10px] text-zinc-600 mt-1">
-                      20–60Hz sub &middot; 60–150Hz punch &middot; 150–400Hz tail
+                      20–60 Hz sub &middot; 60–150 Hz punch &middot; 150–400 Hz tail
                     </div>
                   </div>
                 ) : (
@@ -527,21 +676,20 @@ export function AnalyserCanvas({ vstMode = false }: AnalyserCanvasProps) {
 
         {/* Right column: References */}
         <div className="flex flex-col min-w-0 overflow-hidden">
-          {/* References */}
           <div className="flex-1 bg-[#111113] rounded-xl border border-[#27272a] p-3 flex flex-col min-h-0">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">References</span>
               <div className="flex items-center gap-1.5">
                 <div className="flex rounded-md overflow-hidden border border-[#27272a]">
                   <button onClick={() => setActiveRefSlot('A')}
-                    className={`px-2 py-0.5 text-[10px] font-medium ${activeRefSlot === 'A' ? 'bg-cyan-500/20 text-cyan-300' : 'text-zinc-500 hover:text-zinc-300'}`}
+                    className={segBtn(activeRefSlot === 'A')}
                   >A</button>
                   <button onClick={() => setActiveRefSlot('B')}
-                    className={`px-2 py-0.5 text-[10px] font-medium ${activeRefSlot === 'B' ? 'bg-purple-500/20 text-purple-300' : 'text-zinc-500 hover:text-zinc-300'}`}
+                    className={segBtn(activeRefSlot === 'B', 'purple')}
                   >B</button>
                 </div>
                 <button onClick={captureSnapshot}
-                  className="px-2 py-0.5 rounded-md text-[10px] font-medium border border-[#27272a] bg-[#18181b] text-zinc-300 hover:bg-[#27272a] hover:text-white"
+                  className="px-2 py-0.5 rounded-md text-[10px] font-medium border border-[#27272a] bg-[#18181b] text-zinc-300 hover:bg-[#27272a] hover:text-white transition-colors"
                 >Capture</button>
               </div>
             </div>
@@ -561,30 +709,27 @@ export function AnalyserCanvas({ vstMode = false }: AnalyserCanvasProps) {
               <div className="h-full overflow-y-auto">
                 {snapshots.length === 0 ? (
                   <div className="p-3 text-xs text-zinc-500">Capture snapshots to create A/B references.</div>
-                ) : (
-                  snapshots.map(s => (
-                    <div key={s.id} className="px-2 py-1.5 border-b border-[#27272a]/60 flex items-center gap-1.5">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs text-zinc-200 truncate">{s.name}</div>
-                      </div>
-                      <button onClick={() => assignSnapshot(s.id, 'A')}
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${refAId === s.id ? 'border-cyan-500/40 bg-cyan-500/15 text-cyan-200' : 'border-[#27272a] text-zinc-500 hover:text-zinc-300'}`}
-                      >A</button>
-                      <button onClick={() => assignSnapshot(s.id, 'B')}
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${refBId === s.id ? 'border-purple-500/40 bg-purple-500/15 text-purple-200' : 'border-[#27272a] text-zinc-500 hover:text-zinc-300'}`}
-                      >B</button>
-                      <button onClick={() => deleteSnapshot(s.id)}
-                        className="p-0.5 rounded border border-[#27272a] text-zinc-500 hover:text-zinc-200 hover:bg-[#18181b]"
-                      >
-                        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
-                      </button>
+                ) : snapshots.map(s => (
+                  <div key={s.id} className="px-2 py-1.5 border-b border-[#27272a]/60 flex items-center gap-1.5">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs text-zinc-200 truncate">{s.name}</div>
                     </div>
-                  ))
-                )}
+                    <button onClick={() => assignSnapshot(s.id, 'A')}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${refAId === s.id ? 'border-cyan-500/40 bg-cyan-500/15 text-cyan-200' : 'border-[#27272a] text-zinc-500 hover:text-zinc-300'}`}
+                    >A</button>
+                    <button onClick={() => assignSnapshot(s.id, 'B')}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${refBId === s.id ? 'border-purple-500/40 bg-purple-500/15 text-purple-200' : 'border-[#27272a] text-zinc-500 hover:text-zinc-300'}`}
+                    >B</button>
+                    <button onClick={() => deleteSnapshot(s.id)}
+                      className="p-0.5 rounded border border-[#27272a] text-zinc-500 hover:text-zinc-200 hover:bg-[#18181b] transition-colors"
+                    >
+                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+                    </button>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
-
         </div>
       </div>
 
