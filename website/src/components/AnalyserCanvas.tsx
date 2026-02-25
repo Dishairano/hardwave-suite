@@ -266,7 +266,7 @@ export function AnalyserCanvas({ vstMode = false }: AnalyserCanvasProps) {
       </div>
 
       {/* Main content */}
-      <div className="flex-1 grid grid-cols-[minmax(0,1fr)_280px] gap-3 overflow-hidden p-3">
+      <div className="flex-1 grid grid-cols-[minmax(0,1fr)_280px] grid-rows-[1fr] gap-3 overflow-hidden p-3">
         {/* Left column */}
         <div className="flex flex-col gap-3 min-w-0 overflow-hidden">
           {/* Spectrum */}
