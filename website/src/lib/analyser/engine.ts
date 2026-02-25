@@ -8,7 +8,6 @@ import {
   type StereoBand,
   type TraceId,
   DISPLAY_BANDS,
-  VST_BANDS,
   MIN_FREQ,
   MAX_FREQ,
   SMOOTHING_FAST,
@@ -137,23 +136,50 @@ export class AnalyserEngine {
 
     const smoothing = this.getSmoothingFactor(config.responseTime)
 
-    const inLeft = packet.left_bands
-    const inRight = packet.right_bands
-    const inLen = Math.min(inLeft.length, inRight.length, VST_BANDS)
+    const inLeft = packet.left_bins
+    const inRight = packet.right_bins
+    const numBins = inLeft.length
+
+    // bin i corresponds to frequency: i * sample_rate / (numBins * 2)
+    // (numBins * 2 = FFT_SIZE)
+    const binWidth = packet.sample_rate / (numBins * 2)
+
+    const logMin = Math.log10(MIN_FREQ)
+    const logMax = Math.log10(MAX_FREQ)
 
     let midSum = 0
     let sideSum = 0
 
     for (let i = 0; i < DISPLAY_BANDS; i++) {
-      // Interpolate 64 VST bands → 256 display bands
-      const t = (i + 0.5) / DISPLAY_BANDS
-      const pos = t * inLen - 0.5
-      const j0 = clamp(Math.floor(pos), 0, inLen - 1)
-      const j1 = clamp(j0 + 1, 0, inLen - 1)
-      const frac = clamp(pos - j0, 0, 1)
+      // Log-frequency edges of this display slot
+      const f0 = Math.pow(10, logMin + (i / DISPLAY_BANDS) * (logMax - logMin))
+      const f1 = Math.pow(10, logMin + ((i + 1) / DISPLAY_BANDS) * (logMax - logMin))
 
-      const lDbRaw = lerp(inLeft[j0] ?? -100, inLeft[j1] ?? -100, frac)
-      const rDbRaw = lerp(inRight[j0] ?? -100, inRight[j1] ?? -100, frac)
+      // Corresponding FFT bin range (fractional)
+      const b0 = f0 / binWidth
+      const b1 = f1 / binWidth
+
+      let lDbRaw: number
+      let rDbRaw: number
+
+      if (b1 - b0 < 1.0) {
+        // Fewer than 1 bin spans this display slot — interpolate at centre
+        const bMid = (b0 + b1) * 0.5
+        const bFloor = clamp(Math.floor(bMid), 0, numBins - 1)
+        const bCeil  = clamp(bFloor + 1, 0, numBins - 1)
+        const frac = bMid - Math.floor(bMid)
+        lDbRaw = lerp(inLeft[bFloor] ?? -100, inLeft[bCeil] ?? -100, frac)
+        rDbRaw = lerp(inRight[bFloor] ?? -100, inRight[bCeil] ?? -100, frac)
+      } else {
+        // Multiple bins — take the peak within the range
+        const bStart = clamp(Math.floor(b0), 0, numBins - 1)
+        const bEnd   = clamp(Math.ceil(b1),  0, numBins - 1)
+        lDbRaw = -100; rDbRaw = -100
+        for (let b = bStart; b <= bEnd; b++) {
+          if ((inLeft[b]  ?? -100) > lDbRaw) lDbRaw = inLeft[b]!
+          if ((inRight[b] ?? -100) > rDbRaw) rDbRaw = inRight[b]!
+        }
+      }
 
       const pL = dbToPower(lDbRaw)
       const pR = dbToPower(rDbRaw)
