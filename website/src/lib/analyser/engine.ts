@@ -136,8 +136,9 @@ export class AnalyserEngine {
 
     const smoothing = this.getSmoothingFactor(config.responseTime)
 
-    const inLeft = packet.left_bins
-    const inRight = packet.right_bins
+    // Support both v0.4.21+ (left_bins) and older binaries (left_bands)
+    const inLeft  = packet.left_bins  ?? (packet as unknown as Record<string, number[]>)['left_bands']  ?? []
+    const inRight = packet.right_bins ?? (packet as unknown as Record<string, number[]>)['right_bands'] ?? []
     const numBins = inLeft.length
 
     // bin i corresponds to frequency: i * sample_rate / (numBins * 2)
