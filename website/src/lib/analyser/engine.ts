@@ -172,14 +172,21 @@ export class AnalyserEngine {
         lDbRaw = lerp(inLeft[bFloor] ?? -100, inLeft[bCeil] ?? -100, frac)
         rDbRaw = lerp(inRight[bFloor] ?? -100, inRight[bCeil] ?? -100, frac)
       } else {
-        // Multiple bins — take the peak within the range
+        // Multiple bins — RMS power average across the range.
+        // Peak-of-bins severely underestimates broadband content at high
+        // frequencies where hundreds of bins fall in one display slot.
+        // RMS (mean power) matches how professional analysers like SPAN
+        // measure energy across a frequency band.
         const bStart = clamp(Math.floor(b0), 0, numBins - 1)
         const bEnd   = clamp(Math.ceil(b1),  0, numBins - 1)
-        lDbRaw = -100; rDbRaw = -100
+        const count  = bEnd - bStart + 1
+        let lPowSum = 0, rPowSum = 0
         for (let b = bStart; b <= bEnd; b++) {
-          if ((inLeft[b]  ?? -100) > lDbRaw) lDbRaw = inLeft[b]!
-          if ((inRight[b] ?? -100) > rDbRaw) rDbRaw = inRight[b]!
+          lPowSum += dbToPower(inLeft[b]  ?? -100)
+          rPowSum += dbToPower(inRight[b] ?? -100)
         }
+        lDbRaw = powerToDb(lPowSum / count)
+        rDbRaw = powerToDb(rPowSum / count)
       }
 
       const pL = dbToPower(lDbRaw)
