@@ -19,15 +19,17 @@ ENV NODE_ENV=production
 RUN npm run build --workspace=apps/main
 
 FROM base AS runner
-WORKDIR /app
+WORKDIR /app/apps/main
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
-COPY --from=installer --chown=nextjs:nodejs /app/apps/main/public ./public
-COPY --from=installer --chown=nextjs:nodejs /app/apps/main/.next/standalone ./
+# standalone tree contains apps/main/server.js — copy it to monorepo root
+COPY --from=installer --chown=nextjs:nodejs /app/apps/main/.next/standalone /app/
+# static assets and public must sit next to server.js
 COPY --from=installer --chown=nextjs:nodejs /app/apps/main/.next/static ./.next/static
-RUN mkdir -p /app/public/uploads/contracts && chown -R nextjs:nodejs /app/public/uploads
+COPY --from=installer --chown=nextjs:nodejs /app/apps/main/public ./public
+RUN mkdir -p ./public/uploads/contracts && chown -R nextjs:nodejs ./public/uploads
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000
