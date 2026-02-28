@@ -1,0 +1,33 @@
+services:
+  website:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hardwave-website
+    restart: unless-stopped
+    ports:
+      - "3004:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXTAUTH_URL=https://hardwavestudios.com
+      - PUBLIC_DOWNLOADS_DIR=/public-downloads
+    env_file:
+      - .env.local
+    volumes:
+      - /home/cnstexultant/hardwave-uploads/public-downloads:/public-downloads:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - hardwave-network
+      - db-network
+      - mailcow-network
+
+networks:
+  hardwave-network:
+    driver: bridge
+  db-network:
+    external: true
+    name: hardcore-booking-mvp_hardcore_network
+  mailcow-network:
+    external: true
+    name: mailcowdockerized_mailcow-network

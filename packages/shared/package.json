@@ -1,0 +1,55 @@
+{
+  "name": "@hardwave/shared",
+  "version": "0.0.1",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./auth": "./src/auth.ts",
+    "./db": "./src/db.ts",
+    "./types": "./src/types.ts",
+    "./utils": "./src/utils.ts",
+    "./email": "./src/email.ts",
+    "./notifications": "./src/notifications.ts",
+    "./erp-types": "./src/erp-types.ts",
+    "./erp": "./src/erp.ts",
+    "./contract-storage": "./src/contract-storage.ts",
+    "./pdf-signer": "./src/pdf-signer.ts",
+    "./stripe": "./src/stripe.ts",
+    "./stripe-client": "./src/stripe-client.ts",
+    "./refine-auth-provider": "./src/refine-auth-provider.ts",
+    "./refine-access-control": "./src/refine-access-control.ts",
+    "./refine-data-provider": "./src/refine-data-provider.ts",
+    "./refine-resources": "./src/refine-resources.ts",
+    "./pwa": "./src/pwa/index.ts",
+    "./pwa/*": "./src/pwa/*.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "jsonwebtoken": "^9.0.3",
+    "mysql2": "^3.16.1",
+    "nodemailer": "^8.0.1",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.10.38",
+    "resend": "^6.9.1",
+    "stripe": "^20.2.0",
+    "@refinedev/core": "^5.0.9",
+    "@refinedev/nextjs-router": "^7.0.4",
+    "@refinedev/react-hook-form": "^5.0.4",
+    "@refinedev/react-table": "^6.0.1",
+    "@tanstack/react-table": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/nodemailer": "^7.0.11",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "typescript": "^5"
+  },
+  "peerDependencies": {
+    "next": ">=16",
+    "react": ">=19"
+  }
+}

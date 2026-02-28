@@ -1,0 +1,23 @@
+services:
+  website:
+    build:
+      context: /opt/hardwave/studio
+      dockerfile: apps/analyser/Dockerfile
+    container_name: hardwave-analyser-web
+    restart: unless-stopped
+    ports:
+      - "3004:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXTAUTH_URL=https://analyser.hardwavestudios.com
+      - DATABASE_HOST=46.225.219.184  # MySQL runs on static-pages server
+    env_file:
+      - /opt/hardwave/studio/.env.local
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - hardwave-network
+
+networks:
+  hardwave-network:
+    driver: bridge

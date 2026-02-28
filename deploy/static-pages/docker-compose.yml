@@ -1,0 +1,44 @@
+services:
+  database:
+    image: mysql:8.0
+    container_name: hardwave-database
+    restart: unless-stopped
+    ports:
+      - "3306:3306"            # exposed so erp/analyser/wettboi servers can connect
+    environment:
+      - MYSQL_ROOT_PASSWORD=${DATABASE_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${DATABASE_NAME}
+      - MYSQL_USER=${DATABASE_USER}
+      - MYSQL_PASSWORD=${DATABASE_PASSWORD}
+    volumes:
+      - /opt/hardwave/mysql-data:/var/lib/mysql
+    networks:
+      - hardwave-network
+
+  website:
+    build:
+      context: /opt/hardwave/studio
+      dockerfile: apps/main/Dockerfile
+    container_name: hardwave-website
+    restart: unless-stopped
+    ports:
+      - "3004:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXTAUTH_URL=https://hardwavestudios.com
+      - PUBLIC_DOWNLOADS_DIR=/public-downloads
+      - DATABASE_HOST=database  # use Docker service name — overrides env_file value
+    env_file:
+      - /opt/hardwave/studio/.env.local
+    volumes:
+      - /opt/hardwave/public-downloads:/public-downloads:ro
+    depends_on:
+      - database
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - hardwave-network
+
+networks:
+  hardwave-network:
+    driver: bridge
