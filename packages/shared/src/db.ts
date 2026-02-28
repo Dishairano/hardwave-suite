@@ -13,15 +13,7 @@ const pool = mysql.createPool({
   keepAliveInitialDelay: 0,
 });
 
-// Test connection on startup
-pool.getConnection()
-  .then(connection => {
-    console.log('✅ Database connected successfully');
-    connection.release();
-  })
-  .catch(err => {
-    console.error('❌ Database connection failed:', err);
-  });
+// Connection is validated lazily on first query — no startup test needed.
 
 export async function query<T>(sql: string, params?: any[]): Promise<T> {
   try {

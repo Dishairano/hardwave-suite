@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import jwt from 'jsonwebtoken';
-import Stripe from 'stripe';
+import { getStripe } from '@/lib/stripe';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
-  apiVersion: '2025-12-15.clover',
-});
+export const dynamic = 'force-dynamic';
 
 async function verifyAdmin(request: NextRequest) {
   const authHeader = request.headers.get('authorization');
@@ -59,7 +57,7 @@ export async function POST(
     // Cancel in Stripe if there's a stripe_subscription_id
     if (subscription.stripe_subscription_id) {
       try {
-        await stripe.subscriptions.cancel(subscription.stripe_subscription_id);
+        await getStripe().subscriptions.cancel(subscription.stripe_subscription_id);
       } catch (stripeError) {
         console.error('Stripe cancellation error:', stripeError);
         // Continue with local cancellation even if Stripe fails
