@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Hardwave Suite",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "identifier": "com.hardwavestudios.organizer",
   "build": {
     "frontendDist": "../dist",
@@ -51,7 +51,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/Dishairano/hardwave-suite-releases/releases/latest/download/latest.json"
+        "https://hardwavestudios.com/api/updates/hardwave-suite/latest"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU4NjlBNURFOEEwRjI4MzgKUldRNEtBK0szcVZwNkhyRk9LcHF2c2tXUzNFbkZtT2F6U0lFRDVFaERqMWM1SXRsTGxVUkU0RWgK"
     }

@@ -1,29 +1,47 @@
 {
-  "name": "hardwave-studios",
+  "name": "hardwave-suite",
+  "version": "0.5.7",
+  "description": "Hardwave Suite - Ultimate production toolkit for harder-styles producers",
+  "author": "Hardwave Studios",
+  "license": "MIT",
   "private": true,
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ],
+  "type": "module",
   "scripts": {
-    "build": "turbo build",
-    "dev": "turbo dev",
-    "lint": "turbo lint",
-    "build:main": "turbo build --filter=@hardwave/main",
-    "build:erp": "turbo build --filter=@hardwave/erp",
-    "build:analyser": "turbo build --filter=@hardwave/analyser-app",
-    "build:wettboi": "turbo build --filter=@hardwave/wettboi-app",
-    "migrate": "npx tsx scripts/migrate.ts",
-    "migrate:status": "npx tsx scripts/migrate.ts --status",
-    "migrate:dry": "npx tsx scripts/migrate.ts --dry-run"
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:build:win": "tauri build --target x86_64-pc-windows-msvc",
+    "gen:latest": "node scripts/generate-latest-json.mjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-dialog": "^2.0.0",
+    "@tauri-apps/plugin-fs": "^2.0.0",
+    "@tauri-apps/plugin-shell": "^2.0.0",
+    "@tauri-apps/plugin-updater": "^2.0.0",
+    "clsx": "^2.0.0",
+    "date-fns": "^3.0.0",
+    "lucide-react": "^0.294.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-window": "^1.8.10",
+    "zustand": "^4.4.7"
   },
   "devDependencies": {
-    "turbo": "^2.3.3",
-    "tsx": "^4.19.2",
-    "mysql2": "^3.16.1"
-  },
-  "packageManager": "npm@10.9.2",
-  "engines": {
-    "node": ">=20"
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@types/react-window": "^1.8.8",
+    "@typescript-eslint/eslint-plugin": "^6.14.0",
+    "@typescript-eslint/parser": "^6.14.0",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.16",
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.2.2",
+    "vite": "^5.0.8"
   }
 }

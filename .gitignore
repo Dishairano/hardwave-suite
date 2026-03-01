@@ -6,22 +6,3 @@ src-tauri/target/
 *.log
 .DS_Store
 *-this-session-is-being-continued-from-a-previous-co.txt
-
-# Build artifacts
-**/.next/
-**/target/
-website.backup/
-*.tsbuildinfo
-
-# Large binary downloads — served from mounted volume, not git
-**/public/downloads/*.zip
-**/public/downloads/*.exe
-**/public/downloads/*.dmg
-**/public/downloads/updates/*.zip
-**/public/downloads/updates/*.exe
-**/public/downloads/updates/*.dmg
-
-# Lock files in sub-apps (root lock file is the source of truth)
-apps/*/package-lock.json
-apps/*/yarn.lock
-packages/*/package-lock.json

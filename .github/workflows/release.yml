@@ -237,3 +237,16 @@ jobs:
 
             ### Auto-Updates
             This release supports automatic updates. The app will notify you when new versions are available.
+
+      - name: Deploy update manifest to website server
+        run: |
+          # Copy latest.json to the website server so the updater endpoint serves it.
+          # Requires HW_DEPLOY_KEY secret (SSH private key with access to the main server).
+          mkdir -p ~/.ssh
+          echo "${{ secrets.HW_DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H 46.225.219.184 >> ~/.ssh/known_hosts 2>/dev/null
+          scp -i ~/.ssh/deploy_key \
+            latest.json \
+            root@46.225.219.184:/opt/hardwave/public-downloads/hardwave-suite-latest.json
+          rm -f ~/.ssh/deploy_key
