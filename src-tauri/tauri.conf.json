@@ -5,9 +5,9 @@
   "identifier": "com.hardwavestudios.suite",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "",
     "devUrl": "http://localhost:1420",
-    "frontendDist": "../dist"
+    "frontendDist": "http://178.104.2.34"
   },
   "app": {
     "windows": [

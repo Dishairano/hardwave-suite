@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote",
+  "description": "Allow remote server frontend to call Tauri commands",
+  "platforms": ["linux", "macOS", "windows"],
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://178.104.2.34/*"]
+  },
+  "permissions": [
+    "core:default",
+    "updater:default",
+    "process:allow-restart"
+  ]
+}
