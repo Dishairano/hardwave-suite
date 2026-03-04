@@ -1,6 +1,34 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadFile {
+    pub id: String,
+    pub filename: String,
+    pub file_size: i64,
+    pub platform: String, // "windows" | "mac" | "linux" | "all"
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Product {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub category: String, // "vst" | "sample_pack" | "preset_pack"
+    pub description: String,
+    pub thumbnail_url: Option<String>,
+    pub files: Vec<DownloadFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Purchase {
+    pub id: String,
+    pub product: Product,
+    pub purchased_at: String,
+    pub license_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct File {
     pub id: Option<i64>,
     pub file_path: String,

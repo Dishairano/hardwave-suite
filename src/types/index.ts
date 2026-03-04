@@ -124,6 +124,38 @@ export interface CloudFile {
   uploaded_at: string
 }
 
+export interface DownloadFile {
+  id: string
+  filename: string
+  file_size: number
+  platform: 'windows' | 'mac' | 'linux' | 'all'
+  url: string
+}
+
+export interface Product {
+  id: string
+  name: string
+  version: string
+  category: 'vst' | 'sample_pack' | 'preset_pack'
+  description: string
+  thumbnail_url: string | null
+  files: DownloadFile[]
+}
+
+export interface Purchase {
+  id: string
+  product: Product
+  purchased_at: string
+  license_key: string | null
+}
+
+export interface DownloadState {
+  percent: number
+  status: 'downloading' | 'installing' | 'installed' | 'error'
+  installPath?: string
+  error?: string
+}
+
 export interface StorageUsage {
   used_bytes: number
   used_formatted: string

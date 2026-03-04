@@ -1,5 +1,5 @@
 // Tauri API wrapper - replaces Electron IPC calls
-import type { File, Tag, Collection } from '../types'
+import type { File, Tag, Collection, Purchase, DownloadState } from '../types'
 
 // Check if running in Tauri or browser
 const isTauri = typeof window !== 'undefined' && '__TAURI__' in window
@@ -927,6 +927,100 @@ export const cloud = {
   },
 }
 
+// Mock purchases for browser preview
+const mockPurchases: Purchase[] = [
+  {
+    id: 'purchase-1',
+    product: {
+      id: 'hardstyle-kick-pack-1',
+      name: 'Hardstyle Kick Pack Vol. 1',
+      version: '1.2.0',
+      category: 'sample_pack',
+      description: 'Over 200 premium hardstyle kick samples, crafted for maximum impact on the dancefloor.',
+      thumbnail_url: null,
+      files: [
+        { id: 'f1', filename: 'hardstyle-kicks-v1.zip', file_size: 250000000, platform: 'all', url: 'https://hardwarestudios.com/downloads/hardstyle-kicks-v1.zip' },
+      ],
+    },
+    purchased_at: '2024-01-15T10:00:00Z',
+    license_key: null,
+  },
+  {
+    id: 'purchase-2',
+    product: {
+      id: 'hw-analyser-vst',
+      name: 'Hardwave Analyser VST',
+      version: '2.0.1',
+      category: 'vst',
+      description: 'Professional spectrum analyzer and metering VST3 plugin for DAW integration.',
+      thumbnail_url: null,
+      files: [
+        { id: 'f2', filename: 'HardwaveAnalyser-win-x64.vst3', file_size: 18000000, platform: 'windows', url: 'https://hardwarestudios.com/downloads/HardwaveAnalyser-win-x64.vst3' },
+        { id: 'f3', filename: 'HardwaveAnalyser-mac.vst3', file_size: 22000000, platform: 'mac', url: 'https://hardwarestudios.com/downloads/HardwaveAnalyser-mac.vst3' },
+        { id: 'f4', filename: 'HardwaveAnalyser-linux.vst3', file_size: 17000000, platform: 'linux', url: 'https://hardwarestudios.com/downloads/HardwaveAnalyser-linux.vst3' },
+      ],
+    },
+    purchased_at: '2024-02-01T09:00:00Z',
+    license_key: 'HW-XXXX-XXXX-XXXX',
+  },
+]
+
+interface DownloadProgressEvent {
+  file_id: string
+  percent: number
+  downloaded: number
+  total: number
+  status: DownloadState['status']
+  install_path?: string
+}
+
+// Purchases / Downloads API
+export const purchases = {
+  async getAll(): Promise<Purchase[]> {
+    if (!isTauri) return mockPurchases
+
+    try {
+      return await invoke!<Purchase[]>('get_purchases')
+    } catch {
+      return []
+    }
+  },
+
+  async downloadAndInstall(
+    fileId: string,
+    url: string,
+    filename: string,
+    category: string,
+    productName: string,
+  ): Promise<string> {
+    if (!isTauri) {
+      // Simulate a download in browser mock mode
+      await new Promise<void>((resolve) => setTimeout(resolve, 1500))
+      return `/mock/install/${category}/${filename}`
+    }
+    return invoke!<string>('download_and_install_product', {
+      fileId,
+      url,
+      filename,
+      category,
+      productName,
+    })
+  },
+
+  async openInstallFolder(category: string): Promise<void> {
+    if (!isTauri) return
+    await invoke!('open_install_folder', { category })
+  },
+
+  async onProgress(callback: (progress: DownloadProgressEvent) => void): Promise<() => void> {
+    if (!isTauri) return () => {}
+    const { listen } = await import('@tauri-apps/api/event')
+    return listen<DownloadProgressEvent>('download://progress', (event) => {
+      callback(event.payload)
+    })
+  },
+}
+
 // Export unified API that mimics window.electron
 export const tauri = {
   getVersion: async () => {
@@ -950,6 +1044,7 @@ export const tauri = {
   audio,
   fl,
   cloud,
+  purchases,
 }
 
 // Attach to window for compatibility

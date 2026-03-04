@@ -12,7 +12,8 @@ import {
   ChevronRight,
   RefreshCw,
   Keyboard,
-  Volume2
+  Volume2,
+  Download,
 } from 'lucide-react'
 import type { File } from '../types'
 
@@ -39,6 +40,7 @@ interface HubViewProps {
   onNavigateOrganizer: () => void
   onNavigateKickforge: () => void
   onNavigateAnalyser: () => void
+  onNavigateDownloads: () => void
   onNavigateSettings: () => void
   onImportFolder: () => void
   onCreateTag: () => void
@@ -52,6 +54,7 @@ export function HubView({
   onNavigateOrganizer: _onNavigateOrganizer,
   onNavigateKickforge: _onNavigateKickforge,
   onNavigateAnalyser,
+  onNavigateDownloads,
   onNavigateSettings,
   onImportFolder: _onImportFolder,
   onCreateTag: _onCreateTag,
@@ -161,11 +164,20 @@ export function HubView({
                 gradient="from-orange-500 to-green-500"
                 onClick={onNavigateAnalyser}
               />
+              <ToolCard
+                name="Downloads"
+                description="Download and install your purchased VST plugins and sample packs. Automatic installation to the correct system directory."
+                icon={<Download className="w-7 h-7" />}
+                stat="Your purchased products"
+                gradient="from-blue-500 to-cyan-500"
+                onClick={onNavigateDownloads}
+              />
             </div>
 
             {/* Quick Actions */}
             <div className="flex gap-3">
               <ActionButton icon={<Activity className="w-4 h-4" />} label="Launch Analyser" primary onClick={onNavigateAnalyser} />
+              <ActionButton icon={<Download className="w-4 h-4" />} label="Downloads" onClick={onNavigateDownloads} />
               <ActionButton icon={<Settings className="w-4 h-4" />} label="Settings" onClick={onNavigateSettings} />
             </div>
 

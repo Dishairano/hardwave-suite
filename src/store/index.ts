@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { subscribeWithSelector } from 'zustand/middleware'
-import type { File, Tag, Collection } from '../types'
+import type { File, Tag, Collection, Purchase, DownloadState } from '../types'
 import type { FilterState } from '../components/FilterPanel'
 import type { Tool } from '../components/ToolSwitcher'
 
@@ -170,6 +170,13 @@ interface AppStore {
 
   // Import
   importFolder: () => Promise<void>
+
+  // Purchases / Downloads
+  purchases: Purchase[]
+  activeDownloads: Record<string, DownloadState>
+  loadPurchases: () => Promise<void>
+  downloadAndInstall: (fileId: string, url: string, filename: string, category: string, productName: string) => Promise<void>
+  openInstallFolder: (category: string) => Promise<void>
 }
 
 // ==================== Store Implementation ====================
@@ -649,6 +656,64 @@ export const useAppStore = create<AppStore>()(
       } catch (error) {
         console.error('Import error:', error)
         throw error
+      }
+    },
+
+    // ==================== Purchases / Downloads ====================
+    purchases: [],
+    activeDownloads: {},
+
+    loadPurchases: async () => {
+      try {
+        const result = await window.electron.purchases.getAll()
+        set({ purchases: result })
+      } catch (error) {
+        console.error('Error loading purchases:', error)
+      }
+    },
+
+    downloadAndInstall: async (fileId, url, filename, category, productName) => {
+      set((state) => ({
+        activeDownloads: {
+          ...state.activeDownloads,
+          [fileId]: { percent: 0, status: 'downloading' },
+        },
+      }))
+
+      const unsubscribe = await window.electron.purchases.onProgress((progress) => {
+        if (progress.file_id === fileId) {
+          set((state) => ({
+            activeDownloads: {
+              ...state.activeDownloads,
+              [fileId]: {
+                percent: progress.percent,
+                status: progress.status,
+                installPath: progress.install_path,
+              },
+            },
+          }))
+        }
+      })
+
+      try {
+        await window.electron.purchases.downloadAndInstall(fileId, url, filename, category, productName)
+      } catch (error) {
+        set((state) => ({
+          activeDownloads: {
+            ...state.activeDownloads,
+            [fileId]: { percent: 0, status: 'error', error: String(error) },
+          },
+        }))
+      } finally {
+        unsubscribe()
+      }
+    },
+
+    openInstallFolder: async (category) => {
+      try {
+        await window.electron.purchases.openInstallFolder(category)
+      } catch (error) {
+        console.error('Error opening install folder:', error)
       }
     },
   }))

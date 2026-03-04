@@ -1,6 +1,6 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use crate::models::{AuthResponse, File, Tag, Collection, Stats};
+use crate::models::{AuthResponse, File, Tag, Collection, Stats, Purchase};
 
 const API_BASE: &str = "https://hardwavestudios.com/api";
 
@@ -117,6 +117,24 @@ pub async fn get_stats(token: &str) -> Result<Stats, reqwest::Error> {
         .await?;
 
     Ok(response)
+}
+
+#[derive(Deserialize)]
+struct PurchasesResponse {
+    purchases: Vec<Purchase>,
+}
+
+pub async fn get_purchases(token: &str) -> Result<Vec<Purchase>, reqwest::Error> {
+    let client = Client::new();
+    let response = client
+        .get(format!("{}/user/purchases", API_BASE))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await?
+        .json::<PurchasesResponse>()
+        .await?;
+
+    Ok(response.purchases)
 }
 
 pub async fn sync_files(token: &str, files: &[File]) -> Result<(), reqwest::Error> {

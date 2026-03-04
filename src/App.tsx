@@ -9,6 +9,7 @@ import { HubView } from './views/HubView'
 import { KickforgeView } from './views/KickforgeView'
 import { SettingsView } from './views/SettingsView'
 import { AnalyserView } from './views/AnalyserView'
+import { DownloadsView } from './views/DownloadsView'
 import { TagManagementModal } from './components/TagManagementModal'
 import { CreateCollectionModal } from './components/CreateCollectionModal'
 import { AddTagsModal } from './components/AddTagsModal'
@@ -218,6 +219,7 @@ function App() {
             onNavigateOrganizer={() => setCurrentTool('organizer')}
             onNavigateKickforge={() => setCurrentTool('kickforge')}
             onNavigateAnalyser={() => setCurrentTool('analyser')}
+            onNavigateDownloads={() => setCurrentTool('downloads')}
             onNavigateSettings={() => setCurrentTool('settings')}
             onImportFolder={() => openModal('import')}
             onCreateTag={() => openModal('tagManagement')}
@@ -226,6 +228,8 @@ function App() {
         )
       case 'analyser':
         return <AnalyserView onBack={() => setCurrentTool('hub')} />
+      case 'downloads':
+        return <DownloadsView onBack={() => setCurrentTool('hub')} />
       case 'kickforge':
         return <KickforgeView />
       case 'settings':

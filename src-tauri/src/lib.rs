@@ -5,11 +5,14 @@ mod models;
 mod websocket;
 
 use std::sync::{Arc, Mutex};
-use tauri::State;
+use std::path::PathBuf;
+use tauri::{Emitter, State};
 use db::Database;
 use models::*;
 use websocket::{AudioState, WebSocketServer};
 use websocket::protocol::VstAudioData;
+use futures_util::StreamExt;
+use tokio::io::AsyncWriteExt;
 
 pub struct AppState {
     db: Mutex<Database>,
@@ -290,6 +293,146 @@ async fn is_websocket_server_running(state: State<'_, AppState>) -> Result<bool,
     }
 }
 
+// ==================== DOWNLOADS & INSTALL ====================
+
+#[cfg(target_os = "windows")]
+fn vst_install_dir() -> Result<PathBuf, String> {
+    Ok(PathBuf::from(r"C:\Program Files\Common Files\VST3"))
+}
+
+#[cfg(target_os = "macos")]
+fn vst_install_dir() -> Result<PathBuf, String> {
+    Ok(PathBuf::from("/Library/Audio/Plug-Ins/VST3"))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn vst_install_dir() -> Result<PathBuf, String> {
+    dirs::home_dir()
+        .ok_or_else(|| "Cannot determine home directory".to_string())
+        .map(|h| h.join(".vst3"))
+}
+
+fn get_install_path(category: &str, product_name: &str, filename: &str) -> Result<PathBuf, String> {
+    match category {
+        "vst" | "preset_pack" => Ok(vst_install_dir()?.join(filename)),
+        _ => {
+            let downloads = dirs::download_dir()
+                .or_else(|| dirs::home_dir().map(|h| h.join("Downloads")))
+                .ok_or_else(|| "Cannot determine downloads directory".to_string())?;
+            Ok(downloads.join("Hardwave").join(product_name).join(filename))
+        }
+    }
+}
+
+fn get_install_base_dir(category: &str) -> Result<PathBuf, String> {
+    match category {
+        "vst" | "preset_pack" => vst_install_dir(),
+        _ => {
+            let downloads = dirs::download_dir()
+                .or_else(|| dirs::home_dir().map(|h| h.join("Downloads")))
+                .ok_or_else(|| "Cannot determine downloads directory".to_string())?;
+            Ok(downloads.join("Hardwave"))
+        }
+    }
+}
+
+#[tauri::command]
+async fn get_purchases(state: State<'_, AppState>) -> Result<Vec<Purchase>, String> {
+    let token = {
+        let guard = state.api_token.lock().map_err(|e| e.to_string())?;
+        guard.clone().ok_or_else(|| "Not authenticated".to_string())?
+    };
+    api::get_purchases(&token).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn download_and_install_product(
+    file_id: String,
+    url: String,
+    filename: String,
+    category: String,
+    product_name: String,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let token = {
+        let guard = state.api_token.lock().map_err(|e| e.to_string())?;
+        guard.clone().ok_or_else(|| "Not authenticated".to_string())?
+    };
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let total = response.content_length().unwrap_or(0);
+    let temp_path = std::env::temp_dir().join(&filename);
+    let mut file = tokio::fs::File::create(&temp_path).await.map_err(|e| e.to_string())?;
+
+    let mut downloaded: u64 = 0;
+    let mut stream = response.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+        downloaded += chunk.len() as u64;
+        let percent = if total > 0 { downloaded * 100 / total } else { 0 };
+        let _ = app.emit("download://progress", serde_json::json!({
+            "file_id": file_id,
+            "percent": percent,
+            "downloaded": downloaded,
+            "total": total,
+            "status": "downloading"
+        }));
+    }
+    file.flush().await.map_err(|e| e.to_string())?;
+    drop(file);
+
+    let _ = app.emit("download://progress", serde_json::json!({
+        "file_id": file_id, "percent": 100,
+        "downloaded": downloaded, "total": total,
+        "status": "installing"
+    }));
+
+    let install_path = get_install_path(&category, &product_name, &filename)?;
+    if let Some(parent) = install_path.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+    }
+    tokio::fs::copy(&temp_path, &install_path).await.map_err(|e| e.to_string())?;
+    let _ = tokio::fs::remove_file(&temp_path).await;
+
+    let install_path_str = install_path.to_string_lossy().to_string();
+    let _ = app.emit("download://progress", serde_json::json!({
+        "file_id": file_id, "percent": 100,
+        "downloaded": downloaded, "total": total,
+        "status": "installed",
+        "install_path": install_path_str
+    }));
+
+    Ok(install_path_str)
+}
+
+#[tauri::command]
+async fn open_install_folder(category: String) -> Result<(), String> {
+    let path = get_install_base_dir(&category)?;
+    tokio::fs::create_dir_all(&path).await.map_err(|e| e.to_string())?;
+    let path_str = path.to_string_lossy().to_string();
+
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("explorer").arg(&path_str).spawn().map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open").arg(&path_str).spawn().map_err(|e| e.to_string())?;
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    std::process::Command::new("xdg-open").arg(&path_str).spawn().map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 // ==================== APP ENTRY ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -355,6 +498,10 @@ pub fn run() {
             get_collection_files,
             // Stats
             get_stats,
+            // Downloads
+            get_purchases,
+            download_and_install_product,
+            open_install_folder,
             // VST Bridge
             start_websocket_server,
             stop_websocket_server,
