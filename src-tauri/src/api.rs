@@ -1,6 +1,6 @@
 use crate::models::{AuthResponse, PurchasesResponse, Purchase};
 
-const BASE_URL: &str = "https://hardwarestudios.com/api";
+const BASE_URL: &str = "https://hardwavestudios.com/api";
 
 pub async fn login(email: &str, password: &str) -> Result<AuthResponse, String> {
     let client = reqwest::Client::new();

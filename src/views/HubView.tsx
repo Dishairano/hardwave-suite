@@ -283,7 +283,7 @@ function EmptyState() {
       <h3 className="text-base font-semibold text-white mb-2">No purchases yet</h3>
       <p className="text-sm text-zinc-500 max-w-xs leading-relaxed">
         Your purchased VST plugins and sample packs will appear here.{' '}
-        <a href="https://hardwarestudios.com" target="_blank" rel="noreferrer" className="text-cyan-500 hover:text-cyan-400 transition-colors">
+        <a href="https://hardwavestudios.com" target="_blank" rel="noreferrer" className="text-cyan-500 hover:text-cyan-400 transition-colors">
           Browse the store
         </a>
       </p>

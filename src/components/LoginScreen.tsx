@@ -77,8 +77,8 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
 
         <p className="text-center text-xs text-zinc-600 mt-6">
           Need an account?{' '}
-          <a href="https://hardwarestudios.com" target="_blank" rel="noreferrer" className="text-cyan-500 hover:text-cyan-400 transition-colors">
-            hardwarestudios.com
+          <a href="https://hardwavestudios.com" target="_blank" rel="noreferrer" className="text-cyan-500 hover:text-cyan-400 transition-colors">
+            hardwavestudios.com
           </a>
         </p>
       </div>
