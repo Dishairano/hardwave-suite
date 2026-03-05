@@ -44,6 +44,12 @@ jobs:
             libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
             patchelf libglib2.0-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
 
+      - name: Set version from tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json package.json
+
       - name: Install frontend dependencies
         run: npm install
 
