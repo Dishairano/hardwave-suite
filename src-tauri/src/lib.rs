@@ -74,14 +74,14 @@ async fn set_token(token: String, state: State<'_, AppState>) -> Result<(), Stri
 }
 
 #[tauri::command]
-async fn get_purchases(state: State<'_, AppState>) -> Result<Vec<models::Purchase>, String> {
+async fn get_purchases(state: State<'_, AppState>) -> Result<Vec<models::Product>, String> {
     let token = state
         .api_token
         .lock()
         .unwrap()
         .clone()
         .ok_or("Not authenticated")?;
-    api::get_purchases(&token).await
+    api::get_downloads(&token).await
 }
 
 #[tauri::command]

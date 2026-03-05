@@ -14,29 +14,21 @@ export interface AuthResponse {
   error: string | null
 }
 
-export interface DownloadFile {
-  id: string
-  filename: string
-  file_size: number
-  platform: 'windows' | 'mac' | 'linux' | 'all'
-  url: string
+export interface ProductDownloads {
+  windows: string | null
+  mac: string | null
+  linux: string | null
 }
 
 export interface Product {
-  id: string
+  id: number
   name: string
-  version: string
-  category: 'vst' | 'sample_pack' | 'preset_pack'
+  slug: string
   description: string
-  thumbnail_url: string | null
-  files: DownloadFile[]
-}
-
-export interface Purchase {
-  id: string
-  product: Product
-  purchased_at: string
-  license_key: string | null
+  version: string
+  downloads: ProductDownloads
+  fileSize: number | null
+  changelog: string | null
 }
 
 export interface DownloadProgress {
@@ -70,9 +62,9 @@ export async function getAuthStatus(): Promise<boolean> {
   return invoke<boolean>('get_auth_status')
 }
 
-// Purchases
-export async function getPurchases(): Promise<Purchase[]> {
-  return invoke<Purchase[]>('get_purchases')
+// Products / Downloads
+export async function getProducts(): Promise<Product[]> {
+  return invoke<Product[]>('get_purchases')
 }
 
 // Download + Install

@@ -1,8 +1,8 @@
 import { useEffect, useReducer, useCallback } from 'react'
-import { Download, Package, Music2, Zap, FolderOpen, CheckCircle, Loader2, AlertCircle, LogOut, RefreshCw } from 'lucide-react'
+import { Download, Package, FolderOpen, CheckCircle, Loader2, AlertCircle, LogOut, RefreshCw } from 'lucide-react'
 import { getVersion } from '@tauri-apps/api/app'
 import * as api from '../lib/api'
-import type { Purchase, DownloadFile } from '../lib/api'
+import type { Product } from '../lib/api'
 
 interface HubViewProps {
   user: api.User
@@ -36,9 +36,18 @@ function dlReducer(state: DlMap, action: DlAction): DlMap {
   }
 }
 
+function detectPlatform(): 'windows' | 'mac' | 'linux' {
+  const ua = navigator.userAgent.toLowerCase()
+  if (ua.includes('win')) return 'windows'
+  if (ua.includes('mac')) return 'mac'
+  return 'linux'
+}
+
+const platformLabels: Record<string, string> = { windows: 'Windows', mac: 'macOS', linux: 'Linux' }
+
 export function HubView({ user, onLogout }: HubViewProps) {
-  const [purchases, setPurchases] = useReducer((_: Purchase[], v: Purchase[]) => v, [])
-  const [loadingPurchases, setLoadingPurchases] = useReducer((_: boolean, v: boolean) => v, true)
+  const [products, setProducts] = useReducer((_: Product[], v: Product[]) => v, [])
+  const [loading, setLoading] = useReducer((_: boolean, v: boolean) => v, true)
   const [fetchError, setFetchError] = useReducer((_: string | null, v: string | null) => v, null)
   const [appVersion, setAppVersion] = useReducer((_: string, v: string) => v, '')
   const [downloads, dispatch] = useReducer(dlReducer, {})
@@ -47,31 +56,33 @@ export function HubView({ user, onLogout }: HubViewProps) {
     getVersion().then(setAppVersion).catch(() => {})
   }, [])
 
-  const loadPurchases = useCallback(async () => {
-    setLoadingPurchases(true)
+  const loadProducts = useCallback(async () => {
+    setLoading(true)
     setFetchError(null)
     try {
-      setPurchases(await api.getPurchases())
+      setProducts(await api.getProducts())
     } catch (err) {
-      setFetchError(err instanceof Error ? err.message : 'Failed to load purchases')
+      setFetchError(typeof err === 'string' ? err : (err instanceof Error ? err.message : 'Failed to load purchases'))
     } finally {
-      setLoadingPurchases(false)
+      setLoading(false)
     }
   }, [])
 
-  useEffect(() => { loadPurchases() }, [loadPurchases])
+  useEffect(() => { loadProducts() }, [loadProducts])
 
-  const handleDownload = useCallback(async (file: DownloadFile, purchase: Purchase) => {
-    dispatch({ type: 'start', fileId: file.id })
+  const handleDownload = useCallback(async (product: Product, platform: string, url: string) => {
+    const fileId = `${product.id}-${platform}`
+    const filename = url.split('/').pop() || `${product.slug}-${platform}`
+    dispatch({ type: 'start', fileId })
     const unlisten = await api.onDownloadProgress((p) => {
-      if (p.file_id === file.id) {
-        dispatch({ type: 'progress', fileId: file.id, percent: p.percent, status: p.status as DlState['status'], installPath: p.install_path })
+      if (p.file_id === fileId) {
+        dispatch({ type: 'progress', fileId, percent: p.percent, status: p.status as DlState['status'], installPath: p.install_path })
       }
     })
     try {
-      await api.downloadAndInstall(file.id, file.url, file.filename, purchase.product.category, purchase.product.name)
+      await api.downloadAndInstall(fileId, url, filename, 'vst3', product.name)
     } catch (err) {
-      dispatch({ type: 'error', fileId: file.id, error: String(err) })
+      dispatch({ type: 'error', fileId, error: String(err) })
     } finally {
       unlisten()
     }
@@ -117,30 +128,30 @@ export function HubView({ user, onLogout }: HubViewProps) {
             <p className="text-sm text-zinc-500 mt-1">Your purchased products are ready to download and install.</p>
           </div>
 
-          {loadingPurchases ? (
+          {loading ? (
             <div className="flex items-center gap-3 text-zinc-500 py-12 justify-center">
               <Loader2 className="w-5 h-5 animate-spin" />
-              <span className="text-sm">Loading your library…</span>
+              <span className="text-sm">Loading your library...</span>
             </div>
           ) : fetchError ? (
             <div className="flex flex-col items-center gap-3 py-12 text-center">
               <AlertCircle className="w-8 h-8 text-red-400" />
               <p className="text-sm text-zinc-400">{fetchError}</p>
-              <button onClick={loadPurchases} className="flex items-center gap-1.5 px-4 py-2 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-zinc-300 text-sm rounded-lg transition-colors">
+              <button onClick={loadProducts} className="flex items-center gap-1.5 px-4 py-2 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-zinc-300 text-sm rounded-lg transition-colors">
                 <RefreshCw className="w-3.5 h-3.5" />Retry
               </button>
             </div>
-          ) : purchases.length === 0 ? (
+          ) : products.length === 0 ? (
             <EmptyState />
           ) : (
             <div className="space-y-4">
-              {purchases.map((purchase) => (
-                <PurchaseCard
-                  key={purchase.id}
-                  purchase={purchase}
+              {products.map((product) => (
+                <ProductCard
+                  key={product.id}
+                  product={product}
                   downloads={downloads}
-                  onDownload={(file) => handleDownload(file, purchase)}
-                  onOpenFolder={() => api.openInstallFolder(purchase.product.category)}
+                  onDownload={(platform, url) => handleDownload(product, platform, url)}
+                  onOpenFolder={() => api.openInstallFolder('vst3')}
                 />
               ))}
             </div>
@@ -151,24 +162,29 @@ export function HubView({ user, onLogout }: HubViewProps) {
   )
 }
 
-function PurchaseCard({ purchase, downloads, onDownload, onOpenFolder }: {
-  purchase: Purchase; downloads: DlMap
-  onDownload: (file: DownloadFile) => void; onOpenFolder: () => void
+function ProductCard({ product, downloads, onDownload, onOpenFolder }: {
+  product: Product; downloads: DlMap
+  onDownload: (platform: string, url: string) => void; onOpenFolder: () => void
 }) {
-  const { product } = purchase
-  const anyInstalled = product.files.some((f) => downloads[f.id]?.status === 'installed')
+  const currentPlatform = detectPlatform()
+  const platformUrl = product.downloads[currentPlatform]
+
+  // Build list of available platforms
+  const platforms = (['windows', 'mac', 'linux'] as const).filter((p) => product.downloads[p])
+
+  const anyInstalled = platforms.some((p) => downloads[`${product.id}-${p}`]?.status === 'installed')
 
   return (
     <div className="bg-[#111113] rounded-2xl border border-[#27272a] hover:border-[#3f3f46] transition-colors overflow-hidden">
       <div className="p-5">
         <div className="flex items-start gap-4 mb-4">
           <div className="w-12 h-12 rounded-xl bg-[#1c1c1f] border border-[#27272a] flex items-center justify-center flex-shrink-0">
-            <CategoryIcon category={product.category} />
+            <Package className="w-5 h-5 text-purple-400" />
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex flex-wrap items-center gap-2 mb-0.5">
               <h3 className="text-sm font-bold text-white">{product.name}</h3>
-              <CategoryBadge category={product.category} />
+              <span className="text-[10px] font-medium border rounded-full px-2 py-0.5 text-purple-400 bg-purple-500/10 border-purple-500/20">VST3</span>
               {anyInstalled && (
                 <span className="flex items-center gap-1 text-[10px] font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2 py-0.5">
                   <CheckCircle className="w-2.5 h-2.5" />Installed
@@ -184,32 +200,60 @@ function PurchaseCard({ purchase, downloads, onDownload, onOpenFolder }: {
             </button>
           )}
         </div>
-        <div className="space-y-2">
-          {product.files.map((file) => (
-            <FileRow key={file.id} file={file} state={downloads[file.id]} onDownload={() => onDownload(file)} />
-          ))}
-        </div>
-        {purchase.license_key && (
-          <div className="mt-4 pt-3 border-t border-[#1e1e23] flex items-center gap-2">
-            <span className="text-[10px] text-zinc-600 uppercase tracking-wider flex-shrink-0">License</span>
-            <code className="text-[11px] font-mono text-zinc-500 bg-[#0d0d0f] px-2 py-0.5 rounded truncate">{purchase.license_key}</code>
-          </div>
+
+        {/* Current platform download (highlighted) */}
+        {platformUrl && (
+          <DownloadRow
+            platform={currentPlatform}
+            state={downloads[`${product.id}-${currentPlatform}`]}
+            onDownload={() => onDownload(currentPlatform, platformUrl)}
+            highlight
+          />
+        )}
+
+        {/* Other platforms */}
+        {platforms
+          .filter((p) => p !== currentPlatform)
+          .map((p) => {
+            const url = product.downloads[p]!
+            return (
+              <DownloadRow
+                key={p}
+                platform={p}
+                state={downloads[`${product.id}-${p}`]}
+                onDownload={() => onDownload(p, url)}
+              />
+            )
+          })}
+
+        {platforms.length === 0 && (
+          <div className="text-xs text-zinc-600 px-3 py-2.5">No downloads available for this product.</div>
+        )}
+
+        {product.fileSize && (
+          <div className="mt-3 text-[10px] text-zinc-600">Size: {formatBytes(product.fileSize * 1024 * 1024)}</div>
         )}
       </div>
     </div>
   )
 }
 
-function FileRow({ file, state, onDownload }: { file: DownloadFile; state: DlState | undefined; onDownload: () => void }) {
+function DownloadRow({ platform, state, onDownload, highlight }: {
+  platform: string; state: DlState | undefined
+  onDownload: () => void; highlight?: boolean
+}) {
   const status = state?.status ?? 'idle'
   const inProgress = status === 'downloading' || status === 'installing'
 
   return (
-    <div className="flex items-center gap-3 px-3 py-2.5 bg-[#0d0d0f] rounded-xl border border-[#1c1c1f]">
-      <PlatformBadge platform={file.platform} />
+    <div className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border mb-2 ${
+      highlight ? 'bg-[#0f1114] border-cyan-500/20' : 'bg-[#0d0d0f] border-[#1c1c1f]'
+    }`}>
+      <span className="text-[10px] font-mono text-zinc-600 bg-[#18181b] border border-[#27272a] rounded px-1.5 py-0.5 flex-shrink-0 w-12 text-center">
+        {platformLabels[platform] ?? platform}
+      </span>
       <div className="flex-1 min-w-0">
-        <div className="text-xs font-medium text-zinc-300 truncate">{file.filename}</div>
-        <div className="text-[10px] text-zinc-600">{formatBytes(file.file_size)}</div>
+        {highlight && <div className="text-[10px] text-cyan-500">Your platform</div>}
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
         {inProgress && (
@@ -218,7 +262,7 @@ function FileRow({ file, state, onDownload }: { file: DownloadFile; state: DlSta
               <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full transition-all duration-200" style={{ width: `${state?.percent ?? 0}%` }} />
             </div>
             <span className="text-[10px] text-zinc-500 w-7 text-right">{state?.percent ?? 0}%</span>
-            <span className="text-[10px] text-cyan-400 w-16">{status === 'installing' ? 'Installing…' : 'Downloading…'}</span>
+            <span className="text-[10px] text-cyan-400 w-16">{status === 'installing' ? 'Installing...' : 'Downloading...'}</span>
             <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
           </>
         )}
@@ -242,33 +286,8 @@ function FileRow({ file, state, onDownload }: { file: DownloadFile; state: DlSta
   )
 }
 
-function CategoryIcon({ category }: { category: string }) {
-  if (category === 'vst') return <Zap className="w-5 h-5 text-purple-400" />
-  if (category === 'sample_pack') return <Music2 className="w-5 h-5 text-cyan-400" />
-  return <Package className="w-5 h-5 text-blue-400" />
-}
-
-function CategoryBadge({ category }: { category: string }) {
-  const map: Record<string, [string, string]> = {
-    vst:         ['VST3',        'text-purple-400 bg-purple-500/10 border-purple-500/20'],
-    sample_pack: ['Sample Pack', 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20'],
-    preset_pack: ['Preset Pack', 'text-blue-400 bg-blue-500/10 border-blue-500/20'],
-  }
-  const [label, cls] = map[category] ?? [category, 'text-zinc-400 bg-zinc-500/10 border-zinc-500/20']
-  return <span className={`text-[10px] font-medium border rounded-full px-2 py-0.5 ${cls}`}>{label}</span>
-}
-
-function PlatformBadge({ platform }: { platform: string }) {
-  const labels: Record<string, string> = { windows: 'Win', mac: 'Mac', linux: 'Linux', all: 'All' }
-  return (
-    <span className="text-[10px] font-mono text-zinc-600 bg-[#18181b] border border-[#27272a] rounded px-1.5 py-0.5 flex-shrink-0">
-      {labels[platform] ?? platform}
-    </span>
-  )
-}
-
 function formatBytes(bytes: number): string {
-  if (!bytes) return '—'
+  if (!bytes) return ''
   const k = 1024, sizes = ['B', 'KB', 'MB', 'GB']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`

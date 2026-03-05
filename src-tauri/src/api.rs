@@ -1,4 +1,4 @@
-use crate::models::{AuthResponse, PurchasesResponse, Purchase};
+use crate::models::{AuthResponse, DownloadsResponse, Product};
 
 const BASE_URL: &str = "https://hardwavestudios.com/api";
 
@@ -35,18 +35,23 @@ pub async fn get_auth_status(token: &str) -> Result<bool, String> {
     Ok(res.status().is_success())
 }
 
-pub async fn get_purchases(token: &str) -> Result<Vec<Purchase>, String> {
+pub async fn get_downloads(token: &str) -> Result<Vec<Product>, String> {
     let client = reqwest::Client::new();
     let res = client
-        .get(format!("{}/user/purchases", BASE_URL))
+        .get(format!("{}/downloads", BASE_URL))
         .bearer_auth(token)
         .send()
         .await
         .map_err(|e| e.to_string())?;
 
     let data = res
-        .json::<PurchasesResponse>()
+        .json::<DownloadsResponse>()
         .await
         .map_err(|e| e.to_string())?;
-    Ok(data.purchases)
+
+    if !data.success {
+        return Err(data.error.unwrap_or("Failed to load downloads".into()));
+    }
+
+    Ok(data.products)
 }

@@ -22,36 +22,33 @@ pub struct AuthResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DownloadFile {
-    pub id: String,
-    pub filename: String,
-    pub file_size: i64,
-    pub platform: String,
-    pub url: String,
+pub struct ProductDownloads {
+    pub windows: Option<String>,
+    pub mac: Option<String>,
+    pub linux: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Product {
-    pub id: String,
+    pub id: i64,
     pub name: String,
-    pub version: String,
-    pub category: String,
+    pub slug: String,
     pub description: String,
-    pub thumbnail_url: Option<String>,
-    pub files: Vec<DownloadFile>,
+    pub version: String,
+    pub downloads: ProductDownloads,
+    #[serde(rename = "fileSize", default)]
+    pub file_size: Option<i64>,
+    pub changelog: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Purchase {
-    pub id: String,
-    pub product: Product,
-    pub purchased_at: String,
-    pub license_key: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PurchasesResponse {
-    pub purchases: Vec<Purchase>,
+pub struct DownloadsResponse {
+    pub success: bool,
+    #[serde(rename = "hasAccess", default)]
+    pub has_access: bool,
+    #[serde(default)]
+    pub products: Vec<Product>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
