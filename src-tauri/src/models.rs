@@ -2,9 +2,14 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
-    pub id: String,
+    pub id: i64,
     pub email: String,
+    #[serde(rename = "displayName")]
     pub display_name: Option<String>,
+    #[serde(rename = "avatarUrl")]
+    pub avatar_url: Option<String>,
+    #[serde(rename = "isAdmin", default)]
+    pub is_admin: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,6 +18,7 @@ pub struct AuthResponse {
     pub token: Option<String>,
     pub user: Option<User>,
     pub error: Option<String>,
+    pub subscription: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

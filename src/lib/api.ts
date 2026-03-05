@@ -2,7 +2,9 @@
 export interface User {
   id: number
   email: string
-  display_name: string | null
+  displayName: string | null
+  avatarUrl: string | null
+  isAdmin: boolean
 }
 
 export interface AuthResponse {

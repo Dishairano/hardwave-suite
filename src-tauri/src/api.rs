@@ -11,9 +11,7 @@ pub async fn login(email: &str, password: &str) -> Result<AuthResponse, String> 
         .await
         .map_err(|e| e.to_string())?;
 
-    let text = res.text().await.map_err(|e| e.to_string())?;
-    serde_json::from_str::<AuthResponse>(&text)
-        .map_err(|e| format!("parse error: {} | body: {}", e, text))
+    res.json::<AuthResponse>().await.map_err(|e| e.to_string())
 }
 
 pub async fn logout(token: &str) -> Result<(), String> {

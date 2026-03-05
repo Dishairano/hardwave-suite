@@ -77,7 +77,7 @@ export function HubView({ user, onLogout }: HubViewProps) {
     }
   }, [])
 
-  const displayName = user.display_name || user.email.split('@')[0]
+  const displayName = user.displayName || user.email.split('@')[0]
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden bg-[#09090b]">
