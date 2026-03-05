@@ -48,7 +48,14 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json package.json
+          node -e "
+            const fs = require('fs');
+            for (const f of ['src-tauri/tauri.conf.json', 'package.json']) {
+              const j = JSON.parse(fs.readFileSync(f));
+              j.version = '${VERSION}';
+              fs.writeFileSync(f, JSON.stringify(j, null, 2) + '\n');
+            }
+          "
 
       - name: Install frontend dependencies
         run: npm install
