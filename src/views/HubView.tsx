@@ -91,26 +91,32 @@ export function HubView({ user, onLogout }: HubViewProps) {
   const displayName = user.displayName || user.email.split('@')[0]
 
   return (
-    <div className="flex flex-col flex-1 overflow-hidden bg-[#09090b]">
+    <div className="flex flex-col flex-1 overflow-hidden bg-[#08080c] relative">
+      {/* Background ambient glow */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute -top-32 -right-32 w-[500px] h-[500px] bg-orange-500/[0.03] rounded-full blur-[120px]" />
+        <div className="absolute -bottom-32 -left-32 w-[400px] h-[400px] bg-fuchsia-500/[0.03] rounded-full blur-[120px]" />
+      </div>
+
       {/* Header */}
-      <header className="flex items-center gap-3 px-5 h-14 bg-[#111113] border-b border-[#27272a]/60 flex-shrink-0 drag">
+      <header className="relative flex items-center gap-3 px-5 h-14 bg-white/[0.02] border-b border-white/[0.06] flex-shrink-0 drag backdrop-blur-md">
         <div className="flex items-center gap-2.5 no-drag">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center shadow shadow-cyan-500/20">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 to-fuchsia-600 flex items-center justify-center shadow-lg shadow-orange-500/15">
             <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="currentColor">
               <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
             </svg>
           </div>
           <div>
-            <span className="text-sm font-bold text-white">Hardwave Suite</span>
-            {appVersion && <span className="ml-1.5 text-[10px] text-zinc-600">v{appVersion}</span>}
+            <span className="text-sm font-semibold text-white">Hardwave Suite</span>
+            {appVersion && <span className="ml-1.5 text-[10px] text-zinc-600 font-mono">v{appVersion}</span>}
           </div>
         </div>
         <div className="flex-1" />
-        <div className="flex items-center gap-2 no-drag">
+        <div className="flex items-center gap-3 no-drag">
           <span className="text-xs text-zinc-500 hidden sm:block">{user.email}</span>
           <button
             onClick={onLogout}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-zinc-400 hover:text-white text-xs transition-all"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-zinc-400 hover:text-white text-xs transition-all"
           >
             <LogOut className="w-3.5 h-3.5" />
             Sign out
@@ -119,25 +125,28 @@ export function HubView({ user, onLogout }: HubViewProps) {
       </header>
 
       {/* Content */}
-      <main className="flex-1 overflow-y-auto">
+      <main className="relative flex-1 overflow-y-auto">
         <div className="max-w-4xl mx-auto px-6 py-8">
+          {/* Greeting */}
           <div className="mb-8">
             <h1 className="text-2xl font-bold text-white">
-              Hey, <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-400">{displayName}</span>
+              Hey, <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-fuchsia-400">{displayName}</span>
             </h1>
-            <p className="text-sm text-zinc-500 mt-1">Your purchased products are ready to download and install.</p>
+            <p className="text-sm text-zinc-500 mt-1">Your products are ready to download and install.</p>
           </div>
 
           {loading ? (
-            <div className="flex items-center gap-3 text-zinc-500 py-12 justify-center">
-              <Loader2 className="w-5 h-5 animate-spin" />
+            <div className="flex items-center gap-3 text-zinc-500 py-16 justify-center">
+              <Loader2 className="w-5 h-5 animate-spin text-orange-400" />
               <span className="text-sm">Loading your library...</span>
             </div>
           ) : fetchError ? (
-            <div className="flex flex-col items-center gap-3 py-12 text-center">
-              <AlertCircle className="w-8 h-8 text-red-400" />
+            <div className="flex flex-col items-center gap-4 py-16 text-center">
+              <div className="w-12 h-12 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+                <AlertCircle className="w-5 h-5 text-red-400" />
+              </div>
               <p className="text-sm text-zinc-400">{fetchError}</p>
-              <button onClick={loadProducts} className="flex items-center gap-1.5 px-4 py-2 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-zinc-300 text-sm rounded-lg transition-colors">
+              <button onClick={loadProducts} className="flex items-center gap-1.5 px-4 py-2 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-zinc-300 text-sm rounded-lg transition-colors">
                 <RefreshCw className="w-3.5 h-3.5" />Retry
               </button>
             </div>
@@ -168,40 +177,38 @@ function ProductCard({ product, downloads, onDownload, onOpenFolder }: {
 }) {
   const currentPlatform = detectPlatform()
   const platformUrl = product.downloads[currentPlatform]
-
-  // Build list of available platforms
   const platforms = (['windows', 'mac', 'linux'] as const).filter((p) => product.downloads[p])
-
   const anyInstalled = platforms.some((p) => downloads[`${product.id}-${p}`]?.status === 'installed')
 
   return (
-    <div className="bg-[#111113] rounded-2xl border border-[#27272a] hover:border-[#3f3f46] transition-colors overflow-hidden">
+    <div className="bg-white/[0.03] rounded-2xl border border-white/[0.06] hover:border-white/[0.10] transition-all overflow-hidden glow-orange backdrop-blur-sm">
       <div className="p-5">
+        {/* Product header */}
         <div className="flex items-start gap-4 mb-4">
-          <div className="w-12 h-12 rounded-xl bg-[#1c1c1f] border border-[#27272a] flex items-center justify-center flex-shrink-0">
-            <Package className="w-5 h-5 text-purple-400" />
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-orange-500/20 to-fuchsia-500/10 border border-orange-500/20 flex items-center justify-center flex-shrink-0">
+            <Package className="w-5 h-5 text-orange-400" />
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex flex-wrap items-center gap-2 mb-0.5">
-              <h3 className="text-sm font-bold text-white">{product.name}</h3>
-              <span className="text-[10px] font-medium border rounded-full px-2 py-0.5 text-purple-400 bg-purple-500/10 border-purple-500/20">VST3</span>
+              <h3 className="text-sm font-semibold text-white">{product.name}</h3>
+              <span className="text-[10px] font-medium border rounded-full px-2 py-0.5 text-fuchsia-400 bg-fuchsia-500/10 border-fuchsia-500/20">VST3</span>
               {anyInstalled && (
                 <span className="flex items-center gap-1 text-[10px] font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2 py-0.5">
                   <CheckCircle className="w-2.5 h-2.5" />Installed
                 </span>
               )}
             </div>
-            <div className="text-[11px] text-zinc-600 mb-1">v{product.version}</div>
+            <div className="text-[11px] text-zinc-600 font-mono mb-1">v{product.version}</div>
             <p className="text-xs text-zinc-500 leading-relaxed line-clamp-2">{product.description}</p>
           </div>
           {anyInstalled && (
-            <button onClick={onOpenFolder} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-xs text-zinc-400 hover:text-white transition-all flex-shrink-0">
+            <button onClick={onOpenFolder} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-xs text-zinc-400 hover:text-white transition-all flex-shrink-0">
               <FolderOpen className="w-3.5 h-3.5" /><span className="hidden sm:block">Open Folder</span>
             </button>
           )}
         </div>
 
-        {/* Current platform download (highlighted) */}
+        {/* Download rows */}
         {platformUrl && (
           <DownloadRow
             platform={currentPlatform}
@@ -211,7 +218,6 @@ function ProductCard({ product, downloads, onDownload, onOpenFolder }: {
           />
         )}
 
-        {/* Other platforms */}
         {platforms
           .filter((p) => p !== currentPlatform)
           .map((p) => {
@@ -246,24 +252,24 @@ function DownloadRow({ platform, state, onDownload, highlight }: {
   const inProgress = status === 'downloading' || status === 'installing'
 
   return (
-    <div className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border mb-2 ${
-      highlight ? 'bg-[#0f1114] border-cyan-500/20' : 'bg-[#0d0d0f] border-[#1c1c1f]'
+    <div className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border mb-2 transition-all ${
+      highlight ? 'bg-orange-500/[0.04] border-orange-500/15' : 'bg-white/[0.02] border-white/[0.04]'
     }`}>
-      <span className="text-[10px] font-mono text-zinc-600 bg-[#18181b] border border-[#27272a] rounded px-1.5 py-0.5 flex-shrink-0 w-12 text-center">
+      <span className="text-[10px] font-mono text-zinc-500 bg-white/[0.04] border border-white/[0.06] rounded px-1.5 py-0.5 flex-shrink-0 w-12 text-center">
         {platformLabels[platform] ?? platform}
       </span>
       <div className="flex-1 min-w-0">
-        {highlight && <div className="text-[10px] text-cyan-500">Your platform</div>}
+        {highlight && <div className="text-[10px] text-orange-400/80">Your platform</div>}
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
         {inProgress && (
           <>
-            <div className="w-20 h-1.5 bg-[#27272a] rounded-full overflow-hidden">
-              <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full transition-all duration-200" style={{ width: `${state?.percent ?? 0}%` }} />
+            <div className="w-20 h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
+              <div className="h-full bg-gradient-to-r from-orange-500 to-fuchsia-500 rounded-full transition-all duration-200" style={{ width: `${state?.percent ?? 0}%` }} />
             </div>
-            <span className="text-[10px] text-zinc-500 w-7 text-right">{state?.percent ?? 0}%</span>
-            <span className="text-[10px] text-cyan-400 w-16">{status === 'installing' ? 'Installing...' : 'Downloading...'}</span>
-            <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
+            <span className="text-[10px] text-zinc-500 w-7 text-right font-mono">{state?.percent ?? 0}%</span>
+            <span className="text-[10px] text-orange-400 w-16">{status === 'installing' ? 'Installing...' : 'Downloading...'}</span>
+            <Loader2 className="w-3.5 h-3.5 text-orange-400 animate-spin" />
           </>
         )}
         {status === 'installed' && (
@@ -277,7 +283,7 @@ function DownloadRow({ platform, state, onDownload, highlight }: {
           </span>
         )}
         {!inProgress && status !== 'installed' && (
-          <button onClick={onDownload} className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-medium rounded-lg transition-colors">
+          <button onClick={onDownload} className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-orange-500 to-fuchsia-600 hover:from-orange-400 hover:to-fuchsia-500 text-white text-xs font-medium rounded-lg transition-all shadow-sm shadow-orange-500/15">
             <Download className="w-3 h-3" />{status === 'error' ? 'Retry' : 'Install'}
           </button>
         )}
@@ -296,13 +302,13 @@ function formatBytes(bytes: number): string {
 function EmptyState() {
   return (
     <div className="flex flex-col items-center justify-center py-20 text-center">
-      <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500/10 to-blue-500/10 border border-cyan-500/20 flex items-center justify-center mb-5">
-        <Package className="w-7 h-7 text-cyan-400/60" />
+      <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-orange-500/10 to-fuchsia-500/10 border border-orange-500/20 flex items-center justify-center mb-5">
+        <Package className="w-7 h-7 text-orange-400/60" />
       </div>
       <h3 className="text-base font-semibold text-white mb-2">No purchases yet</h3>
       <p className="text-sm text-zinc-500 max-w-xs leading-relaxed">
         Your purchased VST plugins and sample packs will appear here.{' '}
-        <a href="https://hardwavestudios.com" target="_blank" rel="noreferrer" className="text-cyan-500 hover:text-cyan-400 transition-colors">
+        <a href="https://hardwavestudios.com" target="_blank" rel="noreferrer" className="text-orange-400 hover:text-orange-300 transition-colors">
           Browse the store
         </a>
       </p>

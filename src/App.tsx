@@ -92,8 +92,8 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-[#09090b]">
-        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 animate-pulse" />
+      <div className="flex items-center justify-center h-screen bg-[#08080c]">
+        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-orange-500 to-fuchsia-600 animate-pulse" />
       </div>
     )
   }
