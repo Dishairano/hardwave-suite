@@ -114,6 +114,7 @@ jobs:
       - name: Generate and deploy updater manifest
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           TAG="${GITHUB_REF_NAME}"
@@ -162,5 +163,3 @@ jobs:
           # Upload latest.json to the API endpoint location
           scp -i ~/.ssh/deploy_key /tmp/latest.json root@178.104.2.34:/tmp/latest.json
           ssh -i ~/.ssh/deploy_key root@178.104.2.34 "mkdir -p /var/www/hardwave-app/api/updates/hardwave-suite && cp /tmp/latest.json /var/www/hardwave-app/api/updates/hardwave-suite/latest"
-        env:
-          GH_TOKEN: ${{ github.token }}
