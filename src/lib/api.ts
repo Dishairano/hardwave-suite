@@ -58,6 +58,10 @@ export async function logout(): Promise<void> {
   return invoke('logout')
 }
 
+export async function setToken(token: string): Promise<void> {
+  return invoke('set_token', { token })
+}
+
 export async function getAuthStatus(): Promise<boolean> {
   return invoke<boolean>('get_auth_status')
 }

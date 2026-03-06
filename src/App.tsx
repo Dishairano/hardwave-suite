@@ -36,6 +36,7 @@ export default function App() {
       const saved = api.loadSession()
       if (saved) {
         try {
+          await api.setToken(saved.token)
           const valid = await api.getAuthStatus()
           if (valid) {
             setUser(saved.user)
@@ -96,10 +97,12 @@ export default function App() {
     }
   }
 
-  const handleLogin = async (email: string, password: string) => {
+  const handleLogin = async (email: string, password: string, rememberMe: boolean) => {
     const res = await api.login(email, password)
     if (res.success && res.token && res.user) {
-      api.saveSession(res.token, res.user)
+      if (rememberMe) {
+        api.saveSession(res.token, res.user)
+      }
       setUser(res.user)
     } else {
       throw new Error(res.error ?? 'Login failed')

@@ -2,12 +2,13 @@ import { useState, FormEvent } from 'react'
 import { Loader2 } from 'lucide-react'
 
 interface LoginScreenProps {
-  onLogin: (email: string, password: string) => Promise<void>
+  onLogin: (email: string, password: string, rememberMe: boolean) => Promise<void>
 }
 
 export function LoginScreen({ onLogin }: LoginScreenProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [rememberMe, setRememberMe] = useState(true)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -16,7 +17,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
     setError(null)
     setLoading(true)
     try {
-      await onLogin(email, password)
+      await onLogin(email, password, rememberMe)
     } catch (err) {
       setError(err instanceof Error ? err.message : (typeof err === 'string' ? err : JSON.stringify(err)))
     } finally {
@@ -63,6 +64,23 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             required
             className="w-full px-4 py-3 bg-white/[0.04] border border-white/[0.08] rounded-xl text-white placeholder-zinc-600 text-sm focus:outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/25 transition-all backdrop-blur-sm"
           />
+
+          <label className="flex items-center gap-2 cursor-pointer select-none py-1">
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-4 h-4 rounded border border-white/[0.15] bg-white/[0.04] peer-checked:bg-orange-500 peer-checked:border-orange-500 flex items-center justify-center transition-all">
+              {rememberMe && (
+                <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2 6l3 3 5-5" />
+                </svg>
+              )}
+            </div>
+            <span className="text-xs text-zinc-400">Remember me</span>
+          </label>
 
           {error && (
             <div className="px-4 py-3 bg-red-500/10 border border-red-500/20 rounded-xl text-sm text-red-400">
