@@ -111,9 +111,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate and deploy updater manifest
+      - name: Generate and upload updater manifest
         env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -123,43 +122,38 @@ jobs:
           DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           NOTES=$(gh release view "${TAG}" --json body -q '.body' 2>/dev/null || echo "Bug fixes and improvements")
 
-          # Wait for all assets to be available
-          sleep 10
-
           # Fetch signatures from release assets
+          mkdir -p /tmp/sigs /tmp/sigs-mac /tmp/sigs-linux
           WIN_SIG=$(gh release download "${TAG}" -p "*.exe.sig" -D /tmp/sigs 2>/dev/null && cat /tmp/sigs/*.exe.sig || echo "")
           MAC_SIG=$(gh release download "${TAG}" -p "*.app.tar.gz.sig" -D /tmp/sigs-mac 2>/dev/null && cat /tmp/sigs-mac/*.app.tar.gz.sig || echo "")
           LINUX_SIG=$(gh release download "${TAG}" -p "*.AppImage.sig" -D /tmp/sigs-linux 2>/dev/null && cat /tmp/sigs-linux/*.AppImage.sig || echo "")
 
           # Build latest.json
-          cat > /tmp/latest.json << MANIFEST
-          {
-            "version": "${VERSION}",
-            "notes": $(echo "$NOTES" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read().strip()))"),
-            "pub_date": "${DATE}",
-            "platforms": {
-              "windows-x86_64": {
-                "signature": "${WIN_SIG}",
-                "url": "${BASE}/Hardwave.Suite_${VERSION}_x64-setup.exe"
+          python3 -c "
+          import json, sys
+          notes = '''${NOTES}'''
+          manifest = {
+            'version': '${VERSION}',
+            'notes': notes.strip() if notes.strip() else 'Bug fixes and improvements',
+            'pub_date': '${DATE}',
+            'platforms': {
+              'windows-x86_64': {
+                'signature': '''${WIN_SIG}''',
+                'url': '${BASE}/Hardwave.Suite_${VERSION}_x64-setup.exe'
               },
-              "darwin-aarch64": {
-                "signature": "${MAC_SIG}",
-                "url": "${BASE}/Hardwave.Suite.app.tar.gz"
+              'darwin-aarch64': {
+                'signature': '''${MAC_SIG}''',
+                'url': '${BASE}/Hardwave.Suite.app.tar.gz'
               },
-              "linux-x86_64": {
-                "signature": "${LINUX_SIG}",
-                "url": "${BASE}/Hardwave.Suite_${VERSION}_amd64.AppImage"
+              'linux-x86_64': {
+                'signature': '''${LINUX_SIG}''',
+                'url': '${BASE}/Hardwave.Suite_${VERSION}_amd64.AppImage'
               }
             }
           }
-          MANIFEST
+          with open('/tmp/latest.json', 'w') as f:
+            json.dump(manifest, f, indent=2)
+          "
 
-          # Deploy to server
-          mkdir -p ~/.ssh
-          echo "${DEPLOY_SSH_KEY}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H 178.104.2.34 >> ~/.ssh/known_hosts 2>/dev/null
-
-          # Upload latest.json to the API endpoint location
-          scp -i ~/.ssh/deploy_key /tmp/latest.json root@178.104.2.34:/tmp/latest.json
-          ssh -i ~/.ssh/deploy_key root@178.104.2.34 "mkdir -p /var/www/hardwave-app/api/updates/hardwave-suite && cp /tmp/latest.json /var/www/hardwave-app/api/updates/hardwave-suite/latest"
+          # Upload as release asset (serves as updater endpoint)
+          gh release upload "${TAG}" /tmp/latest.json --clobber
