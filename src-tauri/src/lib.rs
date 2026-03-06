@@ -26,6 +26,44 @@ fn vst3_dir() -> std::path::PathBuf {
     dirs::home_dir().unwrap_or_default().join(".vst3")
 }
 
+/// Copy a directory tree using an elevated process (UAC prompt on Windows).
+#[cfg(target_os = "windows")]
+fn copy_elevated(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    let src_s = src.to_string_lossy();
+    let dest_s = dest.to_string_lossy();
+    let status = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile", "-Command",
+            &format!(
+                "Start-Process -FilePath 'robocopy.exe' -ArgumentList '\"{}\",\"{}\",/E,/IS,/IT' -Verb RunAs -Wait",
+                src_s, dest_s
+            ),
+        ])
+        .status()
+        .map_err(|e| format!("Failed to request elevation: {}", e))?;
+    if !status.success() {
+        return Err("Administrator access was denied or copy failed".into());
+    }
+    Ok(())
+}
+
+/// Recursively copy a directory tree.
+fn copy_dir_all(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(dest)
+        .map_err(|e| format!("Failed to create dir {}: {}", dest.display(), e))?;
+    for entry in std::fs::read_dir(src).map_err(|e| format!("Failed to read dir: {}", e))? {
+        let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+        let dest_path = dest.join(entry.file_name());
+        if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+            copy_dir_all(&entry.path(), &dest_path)?;
+        } else {
+            std::fs::copy(entry.path(), &dest_path)
+                .map_err(|e| format!("Failed to copy {}: {}", entry.path().display(), e))?;
+        }
+    }
+    Ok(())
+}
+
 fn sample_dir(product_name: &str) -> std::path::PathBuf {
     dirs::download_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Downloads"))
@@ -211,17 +249,47 @@ async fn download_and_install(
         _ => sample_dir(&product_name),
     };
 
-    std::fs::create_dir_all(&install_dir)
-        .map_err(|e| format!("Failed to create install dir: {}", e))?;
-
-    // Extract archive or copy raw file
+    // Extract archive to a temp staging dir first
     let lower = filename.to_lowercase();
-    if lower.ends_with(".zip") {
-        extract_zip(&tmp_path, &install_dir)?;
-    } else if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
-        extract_tar_gz(&tmp_path, &install_dir)?;
+    let is_archive = lower.ends_with(".zip") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz");
+
+    if is_archive {
+        let staging_dir = std::env::temp_dir().join(format!("hw_stage_{}", file_id));
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        std::fs::create_dir_all(&staging_dir)
+            .map_err(|e| format!("Failed to create staging dir: {}", e))?;
+
+        if lower.ends_with(".zip") {
+            extract_zip(&tmp_path, &staging_dir)?;
+        } else {
+            extract_tar_gz(&tmp_path, &staging_dir)?;
+        }
+
+        // Try direct copy to install dir
+        match copy_dir_all(&staging_dir, &install_dir) {
+            Ok(()) => {}
+            Err(e) => {
+                // On Windows, if permission denied, elevate via UAC
+                #[cfg(target_os = "windows")]
+                {
+                    if e.contains("Access is denied") || e.contains("os error 5") {
+                        copy_elevated(&staging_dir, &install_dir)?;
+                    } else {
+                        return Err(e);
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    return Err(e);
+                }
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&staging_dir);
     } else {
-        // Not an archive — just copy as-is
+        // Not an archive — copy single file
+        std::fs::create_dir_all(&install_dir)
+            .map_err(|e| format!("Failed to create install dir: {}", e))?;
         tokio::fs::copy(&tmp_path, install_dir.join(&filename))
             .await
             .map_err(|e| e.to_string())?;
