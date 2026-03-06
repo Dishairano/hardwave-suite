@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react'
 import { LoginScreen } from './components/LoginScreen'
 import { HubView } from './views/HubView'
-import { UpdateBanner } from './components/UpdateBanner'
+import { UpdateModal } from './components/UpdateModal'
 import * as api from './lib/api'
 
 interface UpdateInfo {
   version: string
+  changelog: string
+  date: string | null
   available: boolean
+  dismissed: boolean
   downloading: boolean
   progress: number
   downloaded: boolean
@@ -18,7 +21,10 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo>({
     version: '',
+    changelog: '',
+    date: null,
     available: false,
+    dismissed: false,
     downloading: false,
     progress: 0,
     downloaded: false,
@@ -51,7 +57,13 @@ export default function App() {
       const { check } = await import('@tauri-apps/plugin-updater')
       const update = await check()
       if (update?.available) {
-        setUpdateInfo((prev) => ({ ...prev, available: true, version: update.version }))
+        setUpdateInfo((prev) => ({
+          ...prev,
+          available: true,
+          version: update.version,
+          changelog: update.body || '',
+          date: update.date || null,
+        }))
       }
     } catch { /* not in Tauri or no update */ }
   }
@@ -62,10 +74,20 @@ export default function App() {
       const { relaunch } = await import('@tauri-apps/plugin-process')
       const update = await check()
       if (!update?.available) return
-      setUpdateInfo((prev) => ({ ...prev, downloading: true }))
+      setUpdateInfo((prev) => ({ ...prev, downloading: true, error: null }))
       await update.downloadAndInstall((event) => {
+        if (event.event === 'Progress' && 'contentLength' in event.data) {
+          const total = (event.data as { contentLength: number }).contentLength
+          if (total > 0) {
+            setUpdateInfo((prev) => {
+              const chunkLen = (event.data as { chunkLength?: number }).chunkLength || 0
+              const newProgress = Math.min(100, Math.round(((prev.progress / 100) * total + chunkLen) / total * 100))
+              return { ...prev, progress: newProgress }
+            })
+          }
+        }
         if (event.event === 'Finished') {
-          setUpdateInfo((prev) => ({ ...prev, downloading: false, downloaded: true }))
+          setUpdateInfo((prev) => ({ ...prev, downloading: false, downloaded: true, progress: 100 }))
         }
       })
       await relaunch()
@@ -104,17 +126,21 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">
-      {updateInfo.available && (
-        <UpdateBanner
+      <HubView user={user} onLogout={handleLogout} />
+
+      {updateInfo.available && !updateInfo.dismissed && (
+        <UpdateModal
           version={updateInfo.version}
+          changelog={updateInfo.changelog}
+          date={updateInfo.date}
           downloading={updateInfo.downloading}
           progress={updateInfo.progress}
           downloaded={updateInfo.downloaded}
           error={updateInfo.error}
           onUpdate={handleUpdate}
+          onDismiss={() => setUpdateInfo((prev) => ({ ...prev, dismissed: true }))}
         />
       )}
-      <HubView user={user} onLogout={handleLogout} />
     </div>
   )
 }
