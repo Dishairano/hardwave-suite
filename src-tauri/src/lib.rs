@@ -13,21 +13,11 @@ pub struct AppState {
 
 #[cfg(target_os = "windows")]
 fn vst3_dir() -> std::path::PathBuf {
-    // Try user-local VST3 first (no admin needed), fall back to system dir
-    if let Some(home) = dirs::home_dir() {
-        let local = home.join("Documents").join("VST3");
-        if std::fs::create_dir_all(&local).is_ok() {
-            return local;
-        }
-    }
     std::path::PathBuf::from(r"C:\Program Files\Common Files\VST3")
 }
 
 #[cfg(target_os = "macos")]
 fn vst3_dir() -> std::path::PathBuf {
-    if let Some(home) = dirs::home_dir() {
-        return home.join("Library").join("Audio").join("Plug-Ins").join("VST3");
-    }
     std::path::PathBuf::from("/Library/Audio/Plug-Ins/VST3")
 }
 
@@ -41,6 +31,54 @@ fn sample_dir(product_name: &str) -> std::path::PathBuf {
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Downloads"))
         .join("Hardwave")
         .join(product_name)
+}
+
+/// Extract a zip file into dest_dir, then delete the zip.
+fn extract_zip(zip_path: &std::path::Path, dest_dir: &std::path::Path) -> Result<(), String> {
+    let file = std::fs::File::open(zip_path)
+        .map_err(|e| format!("Failed to open zip: {}", e))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("Failed to read zip: {}", e))?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)
+            .map_err(|e| format!("Failed to read zip entry: {}", e))?;
+
+        let name = entry.name().to_string();
+        let out_path = dest_dir.join(&name);
+
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out_path)
+                .map_err(|e| format!("Failed to create dir {}: {}", name, e))?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create parent dir: {}", e))?;
+            }
+            let mut out_file = std::fs::File::create(&out_path)
+                .map_err(|e| format!("Failed to create file {}: {}", name, e))?;
+            std::io::copy(&mut entry, &mut out_file)
+                .map_err(|e| format!("Failed to extract {}: {}", name, e))?;
+        }
+    }
+
+    // Delete the zip after successful extraction
+    let _ = std::fs::remove_file(zip_path);
+    Ok(())
+}
+
+/// Extract a tar.gz file into dest_dir, then delete the archive.
+fn extract_tar_gz(archive_path: &std::path::Path, dest_dir: &std::path::Path) -> Result<(), String> {
+    let file = std::fs::File::open(archive_path)
+        .map_err(|e| format!("Failed to open archive: {}", e))?;
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut tar = tar::Archive::new(gz);
+
+    tar.unpack(dest_dir)
+        .map_err(|e| format!("Failed to extract tar.gz: {}", e))?;
+
+    let _ = std::fs::remove_file(archive_path);
+    Ok(())
 }
 
 #[tauri::command]
@@ -155,6 +193,7 @@ async fn download_and_install(
     tmp_file.flush().await.map_err(|e| e.to_string())?;
     drop(tmp_file);
 
+    // Emit installing status
     let _ = app.emit(
         "dl:progress",
         DownloadProgress {
@@ -172,17 +211,24 @@ async fn download_and_install(
         _ => sample_dir(&product_name),
     };
 
-    tokio::fs::create_dir_all(&install_dir)
-        .await
-        .map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&install_dir)
+        .map_err(|e| format!("Failed to create install dir: {}", e))?;
 
-    let dest = install_dir.join(&filename);
-    tokio::fs::copy(&tmp_path, &dest)
-        .await
-        .map_err(|e| e.to_string())?;
-    let _ = tokio::fs::remove_file(&tmp_path).await;
+    // Extract archive or copy raw file
+    let lower = filename.to_lowercase();
+    if lower.ends_with(".zip") {
+        extract_zip(&tmp_path, &install_dir)?;
+    } else if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+        extract_tar_gz(&tmp_path, &install_dir)?;
+    } else {
+        // Not an archive — just copy as-is
+        tokio::fs::copy(&tmp_path, install_dir.join(&filename))
+            .await
+            .map_err(|e| e.to_string())?;
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+    }
 
-    let install_path = dest.to_string_lossy().to_string();
+    let install_path = install_dir.to_string_lossy().to_string();
 
     let _ = app.emit(
         "dl:progress",
