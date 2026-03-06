@@ -13,11 +13,21 @@ pub struct AppState {
 
 #[cfg(target_os = "windows")]
 fn vst3_dir() -> std::path::PathBuf {
+    // Try user-local VST3 first (no admin needed), fall back to system dir
+    if let Some(home) = dirs::home_dir() {
+        let local = home.join("Documents").join("VST3");
+        if std::fs::create_dir_all(&local).is_ok() {
+            return local;
+        }
+    }
     std::path::PathBuf::from(r"C:\Program Files\Common Files\VST3")
 }
 
 #[cfg(target_os = "macos")]
 fn vst3_dir() -> std::path::PathBuf {
+    if let Some(home) = dirs::home_dir() {
+        return home.join("Library").join("Audio").join("Plug-Ins").join("VST3");
+    }
     std::path::PathBuf::from("/Library/Audio/Plug-Ins/VST3")
 }
 
@@ -102,7 +112,12 @@ async fn download_and_install(
         req = req.bearer_auth(t);
     }
 
-    let res = req.send().await.map_err(|e| e.to_string())?;
+    let res = req.send().await.map_err(|e| format!("Download request failed: {}", e))?;
+
+    if !res.status().is_success() {
+        return Err(format!("Download failed: HTTP {}", res.status()));
+    }
+
     let total = res.content_length().unwrap_or(0);
 
     let tmp_path = std::env::temp_dir().join(&filename);

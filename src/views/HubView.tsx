@@ -278,8 +278,8 @@ function DownloadRow({ platform, state, onDownload, highlight }: {
           </span>
         )}
         {status === 'error' && (
-          <span className="flex items-center gap-1.5 text-xs text-red-400" title={state?.error}>
-            <AlertCircle className="w-3.5 h-3.5" />Failed
+          <span className="flex items-center gap-1.5 text-xs text-red-400 max-w-[200px] truncate" title={state?.error}>
+            <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />{state?.error || 'Failed'}
           </span>
         )}
         {!inProgress && status !== 'installed' && (
