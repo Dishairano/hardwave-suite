@@ -301,6 +301,10 @@ async fn download_and_install(
         match copy_dir_all(&staging_dir, &install_dir) {
             Ok(()) => {}
             Err(e) => {
+                // File is locked by another process (e.g. DAW has the VST loaded)
+                if e.contains("os error 32") || e.contains("being used by another process") {
+                    return Err("The plugin file is in use. Please close your DAW (e.g. FL Studio, Ableton) and try again.".into());
+                }
                 // On Windows, if permission denied, elevate via UAC
                 #[cfg(target_os = "windows")]
                 {
