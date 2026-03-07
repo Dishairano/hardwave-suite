@@ -11,6 +11,36 @@ pub struct AppState {
     pub api_token: Mutex<Option<String>>,
 }
 
+/// Path to the installed products registry file.
+fn installed_registry_path() -> std::path::PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default())
+        .join("Hardwave Suite")
+        .join("installed.json")
+}
+
+/// Read the installed products registry: { "product-slug": "version" }
+fn read_installed() -> std::collections::HashMap<String, String> {
+    let path = installed_registry_path();
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Write a product version to the installed registry.
+fn mark_installed(slug: &str, version: &str) {
+    let path = installed_registry_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut map = read_installed();
+    map.insert(slug.to_string(), version.to_string());
+    if let Ok(json) = serde_json::to_string_pretty(&map) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn vst3_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(r"C:\Program Files\Common Files\VST3")
@@ -177,6 +207,8 @@ async fn download_and_install(
     filename: String,
     category: String,
     product_name: String,
+    product_slug: String,
+    product_version: String,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
@@ -298,6 +330,8 @@ async fn download_and_install(
 
     let install_path = install_dir.to_string_lossy().to_string();
 
+    mark_installed(&product_slug, &product_version);
+
     let _ = app.emit(
         "dl:progress",
         DownloadProgress {
@@ -311,6 +345,11 @@ async fn download_and_install(
     );
 
     Ok(install_path)
+}
+
+#[tauri::command]
+fn get_installed_versions() -> std::collections::HashMap<String, String> {
+    read_installed()
 }
 
 #[tauri::command]
@@ -364,6 +403,7 @@ pub fn run() {
             set_token,
             get_purchases,
             download_and_install,
+            get_installed_versions,
             open_install_folder,
         ])
         .run(tauri::generate_context!())

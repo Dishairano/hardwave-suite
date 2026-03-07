@@ -78,6 +78,8 @@ export async function downloadAndInstall(
   filename: string,
   category: string,
   productName: string,
+  productSlug: string,
+  productVersion: string,
 ): Promise<string> {
   return invoke<string>('download_and_install', {
     fileId,
@@ -85,7 +87,14 @@ export async function downloadAndInstall(
     filename,
     category,
     productName,
+    productSlug,
+    productVersion,
   })
+}
+
+// Installed versions registry (slug → version)
+export async function getInstalledVersions(): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>('get_installed_versions')
 }
 
 export async function openInstallFolder(category: string): Promise<void> {

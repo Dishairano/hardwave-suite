@@ -66,6 +66,19 @@ export function UpdateModal({
             <div className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">
               {formatChangelog(changelog)}
             </div>
+            <a
+              href={`https://hardwavestudios.com/changelog#v${version}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 mt-3 text-xs text-orange-400 hover:text-orange-300 transition-colors"
+            >
+              View full changelog
+              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" />
+                <polyline points="15 3 21 3 21 9" />
+                <line x1="10" y1="14" x2="21" y2="3" />
+              </svg>
+            </a>
           </div>
         </div>
 
@@ -131,8 +144,12 @@ export function UpdateModal({
 
 function formatChangelog(text: string): string {
   if (!text) return 'Bug fixes and improvements.'
-  return text
+  // Split into lines, clean up markdown, take first 4 items as summary
+  const lines = text
     .replace(/^#+\s*/gm, '')
-    .replace(/^\s*[-*]\s*/gm, '\u2022 ')
-    .trim()
+    .split('\n')
+    .map(l => l.replace(/^\s*[-*]\s*/, '').trim())
+    .filter(Boolean)
+  const items = lines.slice(0, 4)
+  return items.map(l => `\u2022 ${l}`).join('\n')
 }

@@ -1,5 +1,5 @@
-import { useEffect, useReducer, useCallback } from 'react'
-import { Download, Package, FolderOpen, CheckCircle, Loader2, AlertCircle, LogOut, RefreshCw } from 'lucide-react'
+import { useEffect, useReducer, useCallback, useState } from 'react'
+import { Download, Package, FolderOpen, CheckCircle, Loader2, AlertCircle, LogOut, RefreshCw, ArrowUpCircle } from 'lucide-react'
 import { getVersion } from '@tauri-apps/api/app'
 import * as api from '../lib/api'
 import type { Product } from '../lib/api'
@@ -51,6 +51,7 @@ export function HubView({ user, onLogout }: HubViewProps) {
   const [fetchError, setFetchError] = useReducer((_: string | null, v: string | null) => v, null)
   const [appVersion, setAppVersion] = useReducer((_: string, v: string) => v, '')
   const [downloads, dispatch] = useReducer(dlReducer, {})
+  const [installedVersions, setInstalledVersions] = useState<Record<string, string>>({})
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => {})
@@ -60,7 +61,12 @@ export function HubView({ user, onLogout }: HubViewProps) {
     setLoading(true)
     setFetchError(null)
     try {
-      setProducts(await api.getProducts())
+      const [prods, installed] = await Promise.all([
+        api.getProducts(),
+        api.getInstalledVersions().catch(() => ({} as Record<string, string>)),
+      ])
+      setProducts(prods)
+      setInstalledVersions(installed)
     } catch (err) {
       setFetchError(typeof err === 'string' ? err : (err instanceof Error ? err.message : 'Failed to load purchases'))
     } finally {
@@ -80,7 +86,8 @@ export function HubView({ user, onLogout }: HubViewProps) {
       }
     })
     try {
-      await api.downloadAndInstall(fileId, url, filename, 'vst3', product.name)
+      await api.downloadAndInstall(fileId, url, filename, 'vst3', product.name, product.slug, product.version)
+      setInstalledVersions(prev => ({ ...prev, [product.slug]: product.version }))
     } catch (err) {
       dispatch({ type: 'error', fileId, error: String(err) })
     } finally {
@@ -159,6 +166,7 @@ export function HubView({ user, onLogout }: HubViewProps) {
                   key={product.id}
                   product={product}
                   downloads={downloads}
+                  installedVersion={installedVersions[product.slug] ?? null}
                   onDownload={(platform, url) => handleDownload(product, platform, url)}
                   onOpenFolder={() => api.openInstallFolder('vst3')}
                 />
@@ -171,14 +179,16 @@ export function HubView({ user, onLogout }: HubViewProps) {
   )
 }
 
-function ProductCard({ product, downloads, onDownload, onOpenFolder }: {
-  product: Product; downloads: DlMap
+function ProductCard({ product, downloads, installedVersion, onDownload, onOpenFolder }: {
+  product: Product; downloads: DlMap; installedVersion: string | null
   onDownload: (platform: string, url: string) => void; onOpenFolder: () => void
 }) {
   const currentPlatform = detectPlatform()
   const platformUrl = product.downloads[currentPlatform]
   const platforms = (['windows', 'mac', 'linux'] as const).filter((p) => product.downloads[p])
-  const anyInstalled = platforms.some((p) => downloads[`${product.id}-${p}`]?.status === 'installed')
+  const sessionInstalled = platforms.some((p) => downloads[`${product.id}-${p}`]?.status === 'installed')
+  const isInstalled = !!installedVersion || sessionInstalled
+  const hasUpdate = installedVersion ? installedVersion !== product.version : false
 
   return (
     <div className="bg-white/[0.03] rounded-2xl border border-white/[0.06] hover:border-white/[0.10] transition-all overflow-hidden glow-orange backdrop-blur-sm">
@@ -192,16 +202,27 @@ function ProductCard({ product, downloads, onDownload, onOpenFolder }: {
             <div className="flex flex-wrap items-center gap-2 mb-0.5">
               <h3 className="text-sm font-semibold text-white">{product.name}</h3>
               <span className="text-[10px] font-medium border rounded-full px-2 py-0.5 text-fuchsia-400 bg-fuchsia-500/10 border-fuchsia-500/20">VST3</span>
-              {anyInstalled && (
+              {hasUpdate && (
+                <span className="flex items-center gap-1 text-[10px] font-medium text-orange-400 bg-orange-500/10 border border-orange-500/20 rounded-full px-2 py-0.5">
+                  <ArrowUpCircle className="w-2.5 h-2.5" />Update available
+                </span>
+              )}
+              {isInstalled && !hasUpdate && (
                 <span className="flex items-center gap-1 text-[10px] font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2 py-0.5">
-                  <CheckCircle className="w-2.5 h-2.5" />Installed
+                  <CheckCircle className="w-2.5 h-2.5" />Up to date
                 </span>
               )}
             </div>
-            <div className="text-[11px] text-zinc-600 font-mono mb-1">v{product.version}</div>
+            <div className="text-[11px] text-zinc-600 font-mono mb-1">
+              {hasUpdate ? (
+                <><span className="text-zinc-500">v{installedVersion}</span> <span className="text-orange-400">&rarr; v{product.version}</span></>
+              ) : (
+                <>v{product.version}</>
+              )}
+            </div>
             <p className="text-xs text-zinc-500 leading-relaxed line-clamp-2">{product.description}</p>
           </div>
-          {anyInstalled && (
+          {isInstalled && (
             <button onClick={onOpenFolder} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-xs text-zinc-400 hover:text-white transition-all flex-shrink-0">
               <FolderOpen className="w-3.5 h-3.5" /><span className="hidden sm:block">Open Folder</span>
             </button>
@@ -215,6 +236,8 @@ function ProductCard({ product, downloads, onDownload, onOpenFolder }: {
             state={downloads[`${product.id}-${currentPlatform}`]}
             onDownload={() => onDownload(currentPlatform, platformUrl)}
             highlight
+            isInstalled={isInstalled && !hasUpdate}
+            hasUpdate={hasUpdate}
           />
         )}
 
@@ -228,6 +251,8 @@ function ProductCard({ product, downloads, onDownload, onOpenFolder }: {
                 platform={p}
                 state={downloads[`${product.id}-${p}`]}
                 onDownload={() => onDownload(p, url)}
+                isInstalled={isInstalled && !hasUpdate}
+                hasUpdate={hasUpdate}
               />
             )
           })}
@@ -244,12 +269,13 @@ function ProductCard({ product, downloads, onDownload, onOpenFolder }: {
   )
 }
 
-function DownloadRow({ platform, state, onDownload, highlight }: {
+function DownloadRow({ platform, state, onDownload, highlight, isInstalled, hasUpdate }: {
   platform: string; state: DlState | undefined
-  onDownload: () => void; highlight?: boolean
+  onDownload: () => void; highlight?: boolean; isInstalled?: boolean; hasUpdate?: boolean
 }) {
   const status = state?.status ?? 'idle'
   const inProgress = status === 'downloading' || status === 'installing'
+  const showInstalled = status === 'installed' || (isInstalled && status === 'idle')
 
   return (
     <div className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border mb-2 transition-all ${
@@ -272,19 +298,29 @@ function DownloadRow({ platform, state, onDownload, highlight }: {
             <Loader2 className="w-3.5 h-3.5 text-orange-400 animate-spin" />
           </>
         )}
-        {status === 'installed' && (
+        {showInstalled && !hasUpdate && (
           <span className="flex items-center gap-1.5 text-xs text-emerald-400 font-medium">
-            <CheckCircle className="w-3.5 h-3.5" />Installed
+            <CheckCircle className="w-3.5 h-3.5" />Up to date
           </span>
+        )}
+        {!inProgress && hasUpdate && status !== 'installed' && (
+          <button onClick={onDownload} className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-orange-500 to-fuchsia-600 hover:from-orange-400 hover:to-fuchsia-500 text-white text-xs font-medium rounded-lg transition-all shadow-sm shadow-orange-500/15">
+            <ArrowUpCircle className="w-3 h-3" />Update
+          </button>
         )}
         {status === 'error' && (
           <span className="flex items-center gap-1.5 text-xs text-red-400 max-w-[200px] truncate" title={state?.error}>
             <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />{state?.error || 'Failed'}
           </span>
         )}
-        {!inProgress && status !== 'installed' && (
+        {!inProgress && !showInstalled && !hasUpdate && status !== 'error' && (
           <button onClick={onDownload} className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-orange-500 to-fuchsia-600 hover:from-orange-400 hover:to-fuchsia-500 text-white text-xs font-medium rounded-lg transition-all shadow-sm shadow-orange-500/15">
-            <Download className="w-3 h-3" />{status === 'error' ? 'Retry' : 'Install'}
+            <Download className="w-3 h-3" />Install
+          </button>
+        )}
+        {status === 'error' && (
+          <button onClick={onDownload} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/[0.06] hover:bg-white/[0.10] border border-white/[0.08] text-zinc-300 text-xs font-medium rounded-lg transition-all">
+            <Download className="w-3 h-3" />Retry
           </button>
         )}
       </div>
