@@ -207,8 +207,8 @@ async fn download_and_install(
     filename: String,
     category: String,
     product_name: String,
-    product_slug: String,
-    product_version: String,
+    product_slug: Option<String>,
+    product_version: Option<String>,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
@@ -334,7 +334,9 @@ async fn download_and_install(
 
     let install_path = install_dir.to_string_lossy().to_string();
 
-    mark_installed(&product_slug, &product_version);
+    if let (Some(slug), Some(ver)) = (&product_slug, &product_version) {
+        mark_installed(slug, ver);
+    }
 
     let _ = app.emit(
         "dl:progress",

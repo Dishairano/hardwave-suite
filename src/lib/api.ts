@@ -78,18 +78,32 @@ export async function downloadAndInstall(
   filename: string,
   category: string,
   productName: string,
-  productSlug: string,
-  productVersion: string,
+  productSlug?: string,
+  productVersion?: string,
 ): Promise<string> {
-  return invoke<string>('download_and_install', {
-    fileId,
-    url,
-    filename,
-    category,
-    productName,
-    productSlug,
-    productVersion,
-  })
+  try {
+    return await invoke<string>('download_and_install', {
+      fileId,
+      url,
+      filename,
+      category,
+      productName,
+      productSlug,
+      productVersion,
+    })
+  } catch (e) {
+    // Fallback for older binaries that don't have productSlug/productVersion params
+    if (typeof e === 'string' && e.includes('invalid args')) {
+      return invoke<string>('download_and_install', {
+        fileId,
+        url,
+        filename,
+        category,
+        productName,
+      })
+    }
+    throw e
+  }
 }
 
 // Installed versions registry (slug → version)
