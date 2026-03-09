@@ -75,6 +75,7 @@ jobs:
           rm /tmp/certificate.p12
 
       - name: Build Tauri
+        shell: bash
         run: |
           if [ -n "${{ matrix.target }}" ]; then
             npm run tauri:build -- --target ${{ matrix.target }}
