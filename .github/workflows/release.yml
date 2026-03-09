@@ -61,7 +61,7 @@ jobs:
         run: npm install
 
       - name: Import Apple certificate
-        if: matrix.platform == 'macos-latest'
+        if: matrix.platform == 'macos-latest' && secrets.APPLE_CERTIFICATE != ''
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -74,8 +74,8 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions build.keychain
           rm /tmp/certificate.p12
 
-      - name: Build Tauri (macOS — signed & notarized)
-        if: matrix.platform == 'macos-latest'
+      - name: Build Tauri (macOS with target)
+        if: matrix.target != ''
         run: npm run tauri:build -- --target ${{ matrix.target }}
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -88,7 +88,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Build Tauri (Windows/Linux)
-        if: matrix.platform != 'macos-latest'
+        if: matrix.target == ''
         run: npm run tauri:build
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

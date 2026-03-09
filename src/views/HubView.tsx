@@ -44,7 +44,6 @@ function detectPlatform(): 'windows' | 'mac' | 'linux' {
 }
 
 const platformLabels: Record<string, string> = { windows: 'Windows', mac: 'macOS', linux: 'Linux' }
-const platformIcons: Record<string, string> = { windows: '⊞', mac: '', linux: '🐧' }
 
 export function HubView({ user, onLogout }: HubViewProps) {
   const [products, setProducts] = useReducer((_: Product[], v: Product[]) => v, [])
