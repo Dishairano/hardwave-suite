@@ -39,6 +39,14 @@ pub struct Product {
     #[serde(rename = "fileSize", default)]
     pub file_size: Option<i64>,
     pub changelog: Option<String>,
+    #[serde(default = "default_category")]
+    pub category: String,
+    #[serde(default)]
+    pub formats: Vec<String>,
+}
+
+fn default_category() -> String {
+    "vst".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -41,6 +41,16 @@ fn mark_installed(slug: &str, version: &str) {
     }
 }
 
+/// Remove a product from the installed registry.
+fn mark_uninstalled(slug: &str) {
+    let path = installed_registry_path();
+    let mut map = read_installed();
+    map.remove(slug);
+    if let Ok(json) = serde_json::to_string_pretty(&map) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn vst3_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(r"C:\Program Files\Common Files\VST3")
@@ -359,6 +369,73 @@ fn get_installed_versions() -> std::collections::HashMap<String, String> {
 }
 
 #[tauri::command]
+async fn uninstall_plugin(slug: String, category: String) -> Result<(), String> {
+    let bundle_name = format!("hardwave-{}", slug);
+
+    let dirs_to_remove: Vec<std::path::PathBuf> = match category.as_str() {
+        "vst" | "vst3" => {
+            let vst = vst3_dir();
+            vec![
+                vst.join(format!("{}.vst3", bundle_name)),
+                vst.join(format!("{}.clap", bundle_name)),
+            ]
+        }
+        _ => {
+            vec![sample_dir(&bundle_name)]
+        }
+    };
+
+    let mut errors = Vec::new();
+    for path in &dirs_to_remove {
+        if !path.exists() {
+            continue;
+        }
+        let result = if path.is_dir() {
+            std::fs::remove_dir_all(path)
+        } else {
+            std::fs::remove_file(path)
+        };
+        if let Err(e) = result {
+            let msg = e.to_string();
+            if msg.contains("os error 32") || msg.contains("being used by another process") {
+                return Err("Plugin file is in use. Close your DAW and try again.".into());
+            }
+            errors.push(format!("{}: {}", path.display(), msg));
+        }
+    }
+
+    if !errors.is_empty() {
+        #[cfg(target_os = "windows")]
+        {
+            // Try elevated removal on Windows
+            for path in &dirs_to_remove {
+                if path.exists() {
+                    let ps = format!(
+                        "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c rmdir /s /q \"{}\"' -Verb RunAs -Wait",
+                        path.to_string_lossy()
+                    );
+                    let _ = std::process::Command::new("powershell")
+                        .args(["-NoProfile", "-Command", &ps])
+                        .status();
+                }
+            }
+            // Check if all removed
+            let still_exists: Vec<_> = dirs_to_remove.iter().filter(|p| p.exists()).collect();
+            if !still_exists.is_empty() {
+                return Err(format!("Failed to remove: {}", errors.join("; ")));
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            return Err(format!("Failed to remove: {}", errors.join("; ")));
+        }
+    }
+
+    mark_uninstalled(&slug);
+    Ok(())
+}
+
+#[tauri::command]
 async fn open_install_folder(category: String) -> Result<(), String> {
     let dir = match category.as_str() {
         "vst" | "vst3" => vst3_dir(),
@@ -410,6 +487,7 @@ pub fn run() {
             get_purchases,
             download_and_install,
             get_installed_versions,
+            uninstall_plugin,
             open_install_folder,
         ])
         .run(tauri::generate_context!())

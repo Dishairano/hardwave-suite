@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useCallback, useState } from 'react'
-import { Download, Package, FolderOpen, CheckCircle, Loader2, AlertCircle, LogOut, RefreshCw, ArrowUpCircle } from 'lucide-react'
+import { Download, Package, FolderOpen, CheckCircle, Loader2, AlertCircle, LogOut, RefreshCw, ArrowUpCircle, Trash2 } from 'lucide-react'
 import { getVersion } from '@tauri-apps/api/app'
 import * as api from '../lib/api'
 import type { Product } from '../lib/api'
@@ -44,6 +44,7 @@ function detectPlatform(): 'windows' | 'mac' | 'linux' {
 }
 
 const platformLabels: Record<string, string> = { windows: 'Windows', mac: 'macOS', linux: 'Linux' }
+const platformIcons: Record<string, string> = { windows: '⊞', mac: '', linux: '🐧' }
 
 export function HubView({ user, onLogout }: HubViewProps) {
   const [products, setProducts] = useReducer((_: Product[], v: Product[]) => v, [])
@@ -86,7 +87,7 @@ export function HubView({ user, onLogout }: HubViewProps) {
       }
     })
     try {
-      await api.downloadAndInstall(fileId, url, filename, 'vst3', product.name, product.slug, product.version)
+      await api.downloadAndInstall(fileId, url, filename, product.category || 'vst', product.name, product.slug, product.version)
       setInstalledVersions(prev => ({ ...prev, [product.slug]: product.version }))
     } catch (err) {
       const msg = String(err)
@@ -97,6 +98,22 @@ export function HubView({ user, onLogout }: HubViewProps) {
       }
     } finally {
       unlisten()
+    }
+  }, [])
+
+  const handleUninstall = useCallback(async (product: Product) => {
+    try {
+      await api.uninstallPlugin(product.slug, product.category || 'vst')
+      setInstalledVersions(prev => {
+        const next = { ...prev }
+        delete next[product.slug]
+        return next
+      })
+      const fileId = `${product.id}-${detectPlatform()}`
+      dispatch({ type: 'progress', fileId, percent: 0, status: 'idle' })
+    } catch (err) {
+      const fileId = `${product.id}-${detectPlatform()}`
+      dispatch({ type: 'error', fileId, error: String(err) })
     }
   }, [])
 
@@ -173,7 +190,8 @@ export function HubView({ user, onLogout }: HubViewProps) {
                   downloads={downloads}
                   installedVersion={installedVersions[product.slug] ?? null}
                   onDownload={(platform, url) => handleDownload(product, platform, url)}
-                  onOpenFolder={() => api.openInstallFolder('vst3')}
+                  onOpenFolder={() => api.openInstallFolder(product.category || 'vst')}
+                  onUninstall={() => handleUninstall(product)}
                 />
               ))}
             </div>
@@ -184,39 +202,35 @@ export function HubView({ user, onLogout }: HubViewProps) {
   )
 }
 
-function ProductCard({ product, downloads, installedVersion, onDownload, onOpenFolder }: {
+function ProductCard({ product, downloads, installedVersion, onDownload, onOpenFolder, onUninstall }: {
   product: Product; downloads: DlMap; installedVersion: string | null
-  onDownload: (platform: string, url: string) => void; onOpenFolder: () => void
+  onDownload: (platform: string, url: string) => void; onOpenFolder: () => void; onUninstall: () => void
 }) {
   const currentPlatform = detectPlatform()
   const platformUrl = product.downloads[currentPlatform]
-  const platforms = (['windows', 'mac', 'linux'] as const).filter((p) => product.downloads[p])
-  const sessionInstalled = platforms.some((p) => downloads[`${product.id}-${p}`]?.status === 'installed')
+  const fileId = `${product.id}-${currentPlatform}`
+  const dlState = downloads[fileId]
+  const status = dlState?.status ?? 'idle'
+  const inProgress = status === 'downloading' || status === 'installing'
+  const sessionInstalled = status === 'installed'
   const isInstalled = !!installedVersion || sessionInstalled
   const hasUpdate = installedVersion ? installedVersion !== product.version : false
+  const showInstalled = sessionInstalled || (isInstalled && !hasUpdate && status === 'idle')
 
   return (
     <div className="bg-white/[0.03] rounded-2xl border border-white/[0.06] hover:border-white/[0.10] transition-all overflow-hidden glow-orange backdrop-blur-sm">
       <div className="p-5">
         {/* Product header */}
-        <div className="flex items-start gap-4 mb-4">
+        <div className="flex items-start gap-4">
           <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-orange-500/20 to-fuchsia-500/10 border border-orange-500/20 flex items-center justify-center flex-shrink-0">
             <Package className="w-5 h-5 text-orange-400" />
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex flex-wrap items-center gap-2 mb-0.5">
               <h3 className="text-sm font-semibold text-white">{product.name}</h3>
-              <span className="text-[10px] font-medium border rounded-full px-2 py-0.5 text-fuchsia-400 bg-fuchsia-500/10 border-fuchsia-500/20">VST3</span>
-              {hasUpdate && (
-                <span className="flex items-center gap-1 text-[10px] font-medium text-orange-400 bg-orange-500/10 border border-orange-500/20 rounded-full px-2 py-0.5">
-                  <ArrowUpCircle className="w-2.5 h-2.5" />Update available
-                </span>
-              )}
-              {isInstalled && !hasUpdate && (
-                <span className="flex items-center gap-1 text-[10px] font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2 py-0.5">
-                  <CheckCircle className="w-2.5 h-2.5" />Up to date
-                </span>
-              )}
+              {(product.formats?.length ? product.formats : ['VST3']).map((fmt) => (
+                <span key={fmt} className="text-[10px] font-medium border rounded-full px-2 py-0.5 text-fuchsia-400 bg-fuchsia-500/10 border-fuchsia-500/20">{fmt}</span>
+              ))}
             </div>
             <div className="text-[11px] text-zinc-600 font-mono mb-1">
               {hasUpdate ? (
@@ -224,110 +238,75 @@ function ProductCard({ product, downloads, installedVersion, onDownload, onOpenF
               ) : (
                 <>v{product.version}</>
               )}
+              <span className="ml-2 text-zinc-600">{platformLabels[currentPlatform]}</span>
             </div>
             <p className="text-xs text-zinc-500 leading-relaxed line-clamp-2">{product.description}</p>
           </div>
-          {isInstalled && (
-            <button onClick={onOpenFolder} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-xs text-zinc-400 hover:text-white transition-all flex-shrink-0">
-              <FolderOpen className="w-3.5 h-3.5" /><span className="hidden sm:block">Open Folder</span>
-            </button>
-          )}
         </div>
 
         {/* Error banner */}
-        {platforms.some((p) => downloads[`${product.id}-${p}`]?.status === 'error') && (() => {
-          const err = platforms.map((p) => downloads[`${product.id}-${p}`]).find((d) => d?.status === 'error')
-          return (
-            <div className="flex items-center gap-2 px-3 py-2.5 mb-3 rounded-xl bg-red-500/[0.08] border border-red-500/20">
-              <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
-              <span className="text-xs text-red-300">{err?.error || 'Installation failed'}</span>
-            </div>
-          )
-        })()}
-
-        {/* Download rows */}
-        {platformUrl && (
-          <DownloadRow
-            platform={currentPlatform}
-            state={downloads[`${product.id}-${currentPlatform}`]}
-            onDownload={() => onDownload(currentPlatform, platformUrl)}
-            highlight
-            isInstalled={isInstalled && !hasUpdate}
-            hasUpdate={hasUpdate}
-          />
+        {status === 'error' && (
+          <div className="flex items-center gap-2 px-3 py-2.5 mt-4 rounded-xl bg-red-500/[0.08] border border-red-500/20">
+            <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
+            <span className="text-xs text-red-300">{dlState?.error || 'Installation failed'}</span>
+          </div>
         )}
 
-        {platforms
-          .filter((p) => p !== currentPlatform)
-          .map((p) => {
-            const url = product.downloads[p]!
-            return (
-              <DownloadRow
-                key={p}
-                platform={p}
-                state={downloads[`${product.id}-${p}`]}
-                onDownload={() => onDownload(p, url)}
-                isInstalled={isInstalled && !hasUpdate}
-                hasUpdate={hasUpdate}
-              />
-            )
-          })}
-
-        {platforms.length === 0 && (
-          <div className="text-xs text-zinc-600 px-3 py-2.5">No downloads available for this product.</div>
+        {/* Action area */}
+        {platformUrl ? (
+          <div className="mt-4 flex items-center gap-3">
+            {inProgress ? (
+              <div className="flex items-center gap-3 flex-1">
+                <div className="flex-1 h-2 bg-white/[0.06] rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-orange-500 to-fuchsia-500 rounded-full transition-all duration-200" style={{ width: `${dlState?.percent ?? 0}%` }} />
+                </div>
+                <span className="text-xs text-zinc-400 font-mono w-8 text-right">{dlState?.percent ?? 0}%</span>
+                <span className="text-xs text-orange-400">{status === 'installing' ? 'Installing...' : 'Downloading...'}</span>
+                <Loader2 className="w-4 h-4 text-orange-400 animate-spin flex-shrink-0" />
+              </div>
+            ) : showInstalled ? (
+              <>
+                <div className="flex items-center gap-2 flex-1">
+                  <CheckCircle className="w-4 h-4 text-emerald-400" />
+                  <span className="text-sm text-emerald-400 font-medium">Installed</span>
+                </div>
+                <button onClick={onUninstall} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/[0.04] hover:bg-red-500/10 border border-white/[0.06] hover:border-red-500/20 text-xs text-zinc-400 hover:text-red-400 transition-all">
+                  <Trash2 className="w-3.5 h-3.5" />Uninstall
+                </button>
+                <button onClick={onOpenFolder} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-xs text-zinc-400 hover:text-white transition-all">
+                  <FolderOpen className="w-3.5 h-3.5" />Open Folder
+                </button>
+              </>
+            ) : hasUpdate ? (
+              <>
+                <div className="flex items-center gap-2 flex-1">
+                  <ArrowUpCircle className="w-4 h-4 text-orange-400" />
+                  <span className="text-xs text-orange-400 font-medium">Update available</span>
+                </div>
+                <button onClick={onUninstall} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/[0.04] hover:bg-red-500/10 border border-white/[0.06] hover:border-red-500/20 text-xs text-zinc-400 hover:text-red-400 transition-all">
+                  <Trash2 className="w-3.5 h-3.5" />Uninstall
+                </button>
+                <button onClick={onOpenFolder} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-xs text-zinc-400 hover:text-white transition-all">
+                  <FolderOpen className="w-3.5 h-3.5" />Open Folder
+                </button>
+                <button onClick={() => onDownload(currentPlatform, platformUrl)} className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-orange-500 to-fuchsia-600 hover:from-orange-400 hover:to-fuchsia-500 text-white text-sm font-medium rounded-lg transition-all shadow-md shadow-orange-500/20">
+                  <ArrowUpCircle className="w-4 h-4" />Update
+                </button>
+              </>
+            ) : (
+              <button onClick={() => onDownload(currentPlatform, platformUrl)} className="flex items-center gap-2 px-4 py-2 ml-auto bg-gradient-to-r from-orange-500 to-fuchsia-600 hover:from-orange-400 hover:to-fuchsia-500 text-white text-sm font-medium rounded-lg transition-all shadow-md shadow-orange-500/20">
+                <Download className="w-4 h-4" />{status === 'error' ? 'Retry' : `Install for ${platformLabels[currentPlatform]}`}
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="mt-4 px-3 py-2.5 rounded-xl bg-white/[0.02] border border-white/[0.04] text-center">
+            <span className="text-xs text-zinc-500">Not available for {platformLabels[currentPlatform]}</span>
+          </div>
         )}
 
         {product.fileSize && (
-          <div className="mt-3 text-[10px] text-zinc-600">Size: {formatBytes(product.fileSize * 1024 * 1024)}</div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function DownloadRow({ platform, state, onDownload, highlight, isInstalled, hasUpdate }: {
-  platform: string; state: DlState | undefined
-  onDownload: () => void; highlight?: boolean; isInstalled?: boolean; hasUpdate?: boolean
-}) {
-  const status = state?.status ?? 'idle'
-  const inProgress = status === 'downloading' || status === 'installing'
-  const showInstalled = status === 'installed' || (isInstalled && status === 'idle')
-
-  return (
-    <div className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border mb-2 transition-all ${
-      highlight ? 'bg-orange-500/[0.04] border-orange-500/15' : 'bg-white/[0.02] border-white/[0.04]'
-    }`}>
-      <span className="text-[10px] font-mono text-zinc-500 bg-white/[0.04] border border-white/[0.06] rounded px-1.5 py-0.5 flex-shrink-0 w-12 text-center">
-        {platformLabels[platform] ?? platform}
-      </span>
-      <div className="flex-1 min-w-0">
-        {highlight && <div className="text-[10px] text-orange-400/80">Your platform</div>}
-      </div>
-      <div className="flex items-center gap-2 flex-shrink-0">
-        {inProgress && (
-          <>
-            <div className="w-20 h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-              <div className="h-full bg-gradient-to-r from-orange-500 to-fuchsia-500 rounded-full transition-all duration-200" style={{ width: `${state?.percent ?? 0}%` }} />
-            </div>
-            <span className="text-[10px] text-zinc-500 w-7 text-right font-mono">{state?.percent ?? 0}%</span>
-            <span className="text-[10px] text-orange-400 w-16">{status === 'installing' ? 'Installing...' : 'Downloading...'}</span>
-            <Loader2 className="w-3.5 h-3.5 text-orange-400 animate-spin" />
-          </>
-        )}
-        {showInstalled && !hasUpdate && (
-          <span className="flex items-center gap-1.5 text-xs text-emerald-400 font-medium">
-            <CheckCircle className="w-3.5 h-3.5" />Up to date
-          </span>
-        )}
-        {!inProgress && hasUpdate && status !== 'installed' && (
-          <button onClick={onDownload} className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-orange-500 to-fuchsia-600 hover:from-orange-400 hover:to-fuchsia-500 text-white text-xs font-medium rounded-lg transition-all shadow-sm shadow-orange-500/15">
-            <ArrowUpCircle className="w-3 h-3" />Update
-          </button>
-        )}
-        {!inProgress && !showInstalled && !hasUpdate && (
-          <button onClick={onDownload} className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-orange-500 to-fuchsia-600 hover:from-orange-400 hover:to-fuchsia-500 text-white text-xs font-medium rounded-lg transition-all shadow-sm shadow-orange-500/15">
-            <Download className="w-3 h-3" />{status === 'error' ? 'Retry' : 'Install'}
-          </button>
+          <div className="mt-2 text-[10px] text-zinc-600 text-right">Size: {formatBytes(product.fileSize * 1024 * 1024)}</div>
         )}
       </div>
     </div>

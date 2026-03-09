@@ -29,6 +29,8 @@ export interface Product {
   downloads: ProductDownloads
   fileSize: number | null
   changelog: string | null
+  category: string
+  formats: string[]
 }
 
 export interface DownloadProgress {
@@ -109,6 +111,10 @@ export async function downloadAndInstall(
 // Installed versions registry (slug → version)
 export async function getInstalledVersions(): Promise<Record<string, string>> {
   return invoke<Record<string, string>>('get_installed_versions')
+}
+
+export async function uninstallPlugin(slug: string, category: string): Promise<void> {
+  return invoke('uninstall_plugin', { slug, category })
 }
 
 export async function openInstallFolder(category: string): Promise<void> {
