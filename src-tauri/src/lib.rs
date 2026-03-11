@@ -71,14 +71,13 @@ fn vst3_dir() -> std::path::PathBuf {
 fn copy_elevated(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
     let src_s = src.to_string_lossy();
     let dest_s = dest.to_string_lossy();
+    // Use xcopy instead of robocopy — simpler exit codes (0 = success)
+    let ps_cmd = format!(
+        "Start-Process -FilePath 'xcopy.exe' -ArgumentList '\"{}\" \"{}\" /E /I /Y /Q' -Verb RunAs -Wait",
+        src_s, dest_s
+    );
     let status = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile", "-Command",
-            &format!(
-                "Start-Process -FilePath 'robocopy.exe' -ArgumentList '\"{}\",\"{}\",/E,/IS,/IT' -Verb RunAs -Wait",
-                src_s, dest_s
-            ),
-        ])
+        .args(["-NoProfile", "-Command", &ps_cmd])
         .status()
         .map_err(|e| format!("Failed to request elevation: {}", e))?;
     if !status.success() {
@@ -328,6 +327,23 @@ async fn download_and_install(
                 {
                     return Err(e);
                 }
+            }
+        }
+
+        // Verify that files were actually copied
+        let entries: Vec<_> = std::fs::read_dir(&install_dir)
+            .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect())
+            .unwrap_or_default();
+        let staging_entries: Vec<_> = std::fs::read_dir(&staging_dir)
+            .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect())
+            .unwrap_or_default();
+        for expected in &staging_entries {
+            if !entries.iter().any(|e| e == expected) {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                return Err(format!(
+                    "Installation failed: '{}' was not found in '{}'. The plugin may require administrator privileges to install. Try running Hardwave Suite as administrator.",
+                    expected, install_dir.display()
+                ));
             }
         }
 
