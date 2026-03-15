@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { LoginScreen } from './components/LoginScreen'
+import { Onboarding } from './components/Onboarding'
 import { HubView } from './views/HubView'
 import { UpdateModal } from './components/UpdateModal'
 import * as api from './lib/api'
@@ -19,6 +20,7 @@ interface UpdateInfo {
 export default function App() {
   const [user, setUser] = useState<api.User | null>(null)
   const [loading, setLoading] = useState(true)
+  const [showOnboarding, setShowOnboarding] = useState(false)
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo>({
     version: '',
     changelog: '',
@@ -103,10 +105,18 @@ export default function App() {
       if (rememberMe) {
         api.saveSession(res.token, res.user)
       }
+      if (!localStorage.getItem('hw_onboarding_done')) {
+        setShowOnboarding(true)
+      }
       setUser(res.user)
     } else {
       throw new Error(res.error ?? 'Login failed')
     }
+  }
+
+  const handleOnboardingComplete = () => {
+    localStorage.setItem('hw_onboarding_done', '1')
+    setShowOnboarding(false)
   }
 
   const handleLogout = async () => {
@@ -125,6 +135,10 @@ export default function App() {
 
   if (!user) {
     return <LoginScreen onLogin={handleLogin} />
+  }
+
+  if (showOnboarding) {
+    return <Onboarding onComplete={handleOnboardingComplete} />
   }
 
   return (

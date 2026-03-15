@@ -41,7 +41,10 @@
     "createUpdaterArtifacts": true,
     "windows": {
       "nsis": {
-        "installMode": "perMachine"
+        "installMode": "perMachine",
+        "template": "nsis/installer.nsi",
+        "headerImage": "nsis/header.bmp",
+        "sidebarImage": "nsis/sidebar.bmp"
       }
     }
   },
