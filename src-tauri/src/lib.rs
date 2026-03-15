@@ -347,13 +347,15 @@ async fn download_with_resume(
                 }
                 Err(_) => {
                     // Network error mid-stream — flush what we have and retry
-                    let _ = tmp_file.flush().await;
-                    drop(tmp_file);
                     chunk_error = true;
                     break;
                 }
             }
         }
+
+        // Flush and drop the file handle before continuing
+        let _ = tmp_file.flush().await;
+        drop(tmp_file);
 
         if chunk_error {
             attempt += 1;
@@ -368,10 +370,6 @@ async fn download_with_resume(
             tokio::time::sleep(delay).await;
             continue;
         }
-
-        // Download complete — flush and rename .part to final
-        tmp_file.flush().await.map_err(|e| e.to_string())?;
-        drop(tmp_file);
         tokio::fs::rename(&part_path, &tmp_path)
             .await
             .map_err(|e| format!("Failed to finalize download: {}", e))?;
