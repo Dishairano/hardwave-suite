@@ -11,12 +11,41 @@ pub struct AppState {
     pub api_token: Mutex<Option<String>>,
 }
 
-/// Path to the installed products registry file.
-fn installed_registry_path() -> std::path::PathBuf {
+/// Base data directory for Hardwave Suite config/data.
+fn data_dir() -> std::path::PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default())
         .join("Hardwave Suite")
-        .join("installed.json")
+}
+
+/// Path to the installed products registry file.
+fn installed_registry_path() -> std::path::PathBuf {
+    data_dir().join("installed.json")
+}
+
+/// Path to the settings file.
+fn settings_path() -> std::path::PathBuf {
+    data_dir().join("settings.json")
+}
+
+/// Read settings from disk.
+fn read_settings() -> std::collections::HashMap<String, String> {
+    let path = settings_path();
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Write settings to disk.
+fn write_settings(settings: &std::collections::HashMap<String, String>) {
+    let path = settings_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(settings) {
+        let _ = std::fs::write(&path, json);
+    }
 }
 
 /// Read the installed products registry: { "product-slug": "version" }
@@ -51,19 +80,26 @@ fn mark_uninstalled(slug: &str) {
     }
 }
 
-#[cfg(target_os = "windows")]
-fn vst3_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from(r"C:\Program Files\Common Files\VST3")
+fn default_vst3_dir() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    { std::path::PathBuf::from(r"C:\Program Files\Common Files\VST3") }
+    #[cfg(target_os = "macos")]
+    { std::path::PathBuf::from("/Library/Audio/Plug-Ins/VST3") }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    { dirs::home_dir().unwrap_or_default().join(".vst3") }
 }
 
-#[cfg(target_os = "macos")]
-fn vst3_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from("/Library/Audio/Plug-Ins/VST3")
+fn default_sample_dir() -> std::path::PathBuf {
+    dirs::download_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Downloads"))
+        .join("Hardwave")
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn vst3_dir() -> std::path::PathBuf {
-    dirs::home_dir().unwrap_or_default().join(".vst3")
+    let settings = read_settings();
+    settings.get("vst3_path")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(default_vst3_dir)
 }
 
 /// Copy a directory tree using an elevated process (UAC prompt on Windows).
@@ -104,10 +140,11 @@ fn copy_dir_all(src: &std::path::Path, dest: &std::path::Path) -> Result<(), Str
 }
 
 fn sample_dir(product_name: &str) -> std::path::PathBuf {
-    dirs::download_dir()
-        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Downloads"))
-        .join("Hardwave")
-        .join(product_name)
+    let settings = read_settings();
+    let base = settings.get("sample_path")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(default_sample_dir);
+    base.join(product_name)
 }
 
 /// Extract a zip file into dest_dir, then delete the zip.
@@ -603,10 +640,63 @@ async fn open_install_folder(category: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn get_install_paths() -> std::collections::HashMap<String, String> {
+    let mut paths = std::collections::HashMap::new();
+    paths.insert("vst3".to_string(), vst3_dir().to_string_lossy().to_string());
+    paths.insert("sample".to_string(), default_sample_dir().to_string_lossy().to_string());
+
+    // Return actual configured values (or defaults)
+    let settings = read_settings();
+    if let Some(v) = settings.get("vst3_path") {
+        paths.insert("vst3".to_string(), v.clone());
+    }
+    if let Some(v) = settings.get("sample_path") {
+        paths.insert("sample".to_string(), v.clone());
+    }
+
+    // Also include the defaults so the UI can show a "Reset" option
+    paths.insert("vst3_default".to_string(), default_vst3_dir().to_string_lossy().to_string());
+    paths.insert("sample_default".to_string(), default_sample_dir().to_string_lossy().to_string());
+
+    paths
+}
+
+#[tauri::command]
+fn set_install_path(key: String, path: String) -> Result<(), String> {
+    let setting_key = match key.as_str() {
+        "vst3" => "vst3_path",
+        "sample" => "sample_path",
+        _ => return Err(format!("Unknown path key: {}", key)),
+    };
+    let mut settings = read_settings();
+    if path.is_empty() {
+        settings.remove(setting_key);
+    } else {
+        settings.insert(setting_key.to_string(), path);
+    }
+    write_settings(&settings);
+    Ok(())
+}
+
+#[tauri::command]
+async fn pick_folder(app: tauri::AppHandle, title: String) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title(&title)
+        .pick_folder(move |path| {
+            let _ = tx.send(path.and_then(|p| p.as_path().map(|pp| pp.to_string_lossy().to_string())));
+        });
+    rx.await.map_err(|e| format!("Dialog error: {}", e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
@@ -629,6 +719,9 @@ pub fn run() {
             get_installed_versions,
             uninstall_plugin,
             open_install_folder,
+            get_install_paths,
+            set_install_path,
+            pick_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

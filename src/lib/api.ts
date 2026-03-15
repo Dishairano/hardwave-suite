@@ -121,6 +121,19 @@ export async function openInstallFolder(category: string): Promise<void> {
   return invoke('open_install_folder', { category })
 }
 
+// Install path settings
+export async function getInstallPaths(): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>('get_install_paths')
+}
+
+export async function setInstallPath(key: string, path: string): Promise<void> {
+  return invoke('set_install_path', { key, path })
+}
+
+export async function pickFolder(title: string): Promise<string | null> {
+  return invoke<string | null>('pick_folder', { title })
+}
+
 // Progress event listener
 export async function onDownloadProgress(
   callback: (p: DownloadProgress) => void,

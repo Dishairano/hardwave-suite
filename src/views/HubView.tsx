@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useReducer, useCallback, useState, useRef } from 'react'
-import { Download, Package, FolderOpen, CheckCircle, Loader2, AlertCircle, LogOut, RefreshCw, ArrowUpCircle, Trash2 } from 'lucide-react'
+import { Download, Package, FolderOpen, CheckCircle, Loader2, AlertCircle, LogOut, RefreshCw, ArrowUpCircle, Trash2, Settings } from 'lucide-react'
+import { SettingsPanel } from '../components/SettingsPanel'
 import { getVersion } from '@tauri-apps/api/app'
 import anime from 'animejs'
 import * as api from '../lib/api'
@@ -56,6 +57,7 @@ export function HubView({ user, onLogout, preloadedProducts, preloadedVersions }
   const [appVersion, setAppVersion] = useReducer((_: string, v: string) => v, '')
   const [downloads, dispatch] = useReducer(dlReducer, {})
   const [installedVersions, setInstalledVersions] = useState<Record<string, string>>(preloadedVersions ?? {})
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const headerRef = useRef<HTMLElement>(null)
   const greetingRef = useRef<HTMLDivElement>(null)
@@ -221,6 +223,13 @@ export function HubView({ user, onLogout, preloadedProducts, preloadedVersions }
         <div className="flex items-center gap-3 no-drag">
           <span className="text-xs text-zinc-500 hidden sm:block">{user.email}</span>
           <button
+            onClick={() => setSettingsOpen(true)}
+            className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-zinc-400 hover:text-white transition-all"
+            title="Settings"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
+          <button
             onClick={onLogout}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-zinc-400 hover:text-white text-xs transition-all"
           >
@@ -229,6 +238,8 @@ export function HubView({ user, onLogout, preloadedProducts, preloadedVersions }
           </button>
         </div>
       </header>
+
+      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
       {/* Content */}
       <main className="relative flex-1 overflow-y-auto">
