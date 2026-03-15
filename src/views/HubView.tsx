@@ -1,12 +1,15 @@
-import { useEffect, useReducer, useCallback, useState } from 'react'
+import { useEffect, useLayoutEffect, useReducer, useCallback, useState, useRef } from 'react'
 import { Download, Package, FolderOpen, CheckCircle, Loader2, AlertCircle, LogOut, RefreshCw, ArrowUpCircle, Trash2 } from 'lucide-react'
 import { getVersion } from '@tauri-apps/api/app'
+import anime from 'animejs'
 import * as api from '../lib/api'
 import type { Product } from '../lib/api'
 
 interface HubViewProps {
   user: api.User
   onLogout: () => void
+  preloadedProducts?: Product[] | null
+  preloadedVersions?: Record<string, string> | null
 }
 
 interface DlState {
@@ -45,17 +48,92 @@ function detectPlatform(): 'windows' | 'mac' | 'linux' {
 
 const platformLabels: Record<string, string> = { windows: 'Windows', mac: 'macOS', linux: 'Linux' }
 
-export function HubView({ user, onLogout }: HubViewProps) {
-  const [products, setProducts] = useReducer((_: Product[], v: Product[]) => v, [])
-  const [loading, setLoading] = useReducer((_: boolean, v: boolean) => v, true)
+export function HubView({ user, onLogout, preloadedProducts, preloadedVersions }: HubViewProps) {
+  const hasPreloaded = !!(preloadedProducts && preloadedProducts.length >= 0)
+  const [products, setProducts] = useReducer((_: Product[], v: Product[]) => v, preloadedProducts ?? [])
+  const [loading, setLoading] = useReducer((_: boolean, v: boolean) => v, !hasPreloaded)
   const [fetchError, setFetchError] = useReducer((_: string | null, v: string | null) => v, null)
   const [appVersion, setAppVersion] = useReducer((_: string, v: string) => v, '')
   const [downloads, dispatch] = useReducer(dlReducer, {})
-  const [installedVersions, setInstalledVersions] = useState<Record<string, string>>({})
+  const [installedVersions, setInstalledVersions] = useState<Record<string, string>>(preloadedVersions ?? {})
+
+  const headerRef = useRef<HTMLElement>(null)
+  const greetingRef = useRef<HTMLDivElement>(null)
+  const cardsRef = useRef<HTMLDivElement>(null)
+  const glow1Ref = useRef<HTMLDivElement>(null)
+  const glow2Ref = useRef<HTMLDivElement>(null)
+  const animatedRef = useRef(false)
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => {})
   }, [])
+
+  // Entrance animations
+  useEffect(() => {
+    const tl = anime.timeline({ easing: 'easeOutCubic' })
+
+    // Background glows fade in smoothly
+    tl.add({
+      targets: [glow1Ref.current, glow2Ref.current],
+      opacity: [0, 1],
+      duration: 1200,
+      easing: 'easeOutQuad',
+    }, 0)
+
+    // Glow breathing — slow, subtle drift
+    anime({
+      targets: glow1Ref.current,
+      translateX: [0, 20, 0],
+      translateY: [0, -15, 0],
+      scale: [1, 1.05, 1],
+      duration: 10000,
+      easing: 'easeInOutSine',
+      loop: true,
+    })
+    anime({
+      targets: glow2Ref.current,
+      translateX: [0, -15, 0],
+      translateY: [0, 10, 0],
+      scale: [1, 1.08, 1],
+      duration: 12000,
+      easing: 'easeInOutSine',
+      loop: true,
+    })
+
+    // Header slides down with gentle deceleration
+    tl.add({
+      targets: headerRef.current,
+      translateY: [-30, 0],
+      opacity: [0, 1],
+      duration: 600,
+      easing: 'easeOutCubic',
+    }, 50)
+
+    // Greeting fades up (not sideways — cleaner)
+    tl.add({
+      targets: greetingRef.current,
+      translateY: [20, 0],
+      opacity: [0, 1],
+      filter: ['blur(4px)', 'blur(0px)'],
+      duration: 500,
+      easing: 'easeOutCubic',
+    }, 250)
+  }, [])
+
+  // Stagger product cards when they load
+  useEffect(() => {
+    if (!loading && products.length > 0 && cardsRef.current && !animatedRef.current) {
+      animatedRef.current = true
+      anime({
+        targets: cardsRef.current.children,
+        translateY: [30, 0],
+        opacity: [0, 1],
+        duration: 500,
+        delay: anime.stagger(80, { start: 200 }),
+        easing: 'easeOutCubic',
+      })
+    }
+  }, [loading, products])
 
   const loadProducts = useCallback(async () => {
     setLoading(true)
@@ -74,7 +152,7 @@ export function HubView({ user, onLogout }: HubViewProps) {
     }
   }, [])
 
-  useEffect(() => { loadProducts() }, [loadProducts])
+  useEffect(() => { if (!hasPreloaded) loadProducts() }, [loadProducts, hasPreloaded])
 
   const handleDownload = useCallback(async (product: Product, platform: string, url: string) => {
     const fileId = `${product.id}-${platform}`
@@ -122,12 +200,12 @@ export function HubView({ user, onLogout }: HubViewProps) {
     <div className="flex flex-col flex-1 overflow-hidden bg-[#08080c] relative">
       {/* Background ambient glow */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute -top-32 -right-32 w-[500px] h-[500px] bg-orange-500/[0.03] rounded-full blur-[120px]" />
-        <div className="absolute -bottom-32 -left-32 w-[400px] h-[400px] bg-fuchsia-500/[0.03] rounded-full blur-[120px]" />
+        <div ref={glow1Ref} className="absolute -top-32 -right-32 w-[500px] h-[500px] bg-orange-500/[0.03] rounded-full blur-[120px] opacity-0" />
+        <div ref={glow2Ref} className="absolute -bottom-32 -left-32 w-[400px] h-[400px] bg-fuchsia-500/[0.03] rounded-full blur-[120px] opacity-0" />
       </div>
 
       {/* Header */}
-      <header className="relative flex items-center gap-3 px-5 h-14 bg-white/[0.02] border-b border-white/[0.06] flex-shrink-0 drag backdrop-blur-md">
+      <header ref={headerRef} className="relative flex items-center gap-3 px-5 h-14 bg-white/[0.02] border-b border-white/[0.06] flex-shrink-0 drag backdrop-blur-md opacity-0">
         <div className="flex items-center gap-2.5 no-drag">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 to-fuchsia-600 flex items-center justify-center shadow-lg shadow-orange-500/15">
             <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="currentColor">
@@ -156,7 +234,7 @@ export function HubView({ user, onLogout }: HubViewProps) {
       <main className="relative flex-1 overflow-y-auto">
         <div className="max-w-4xl mx-auto px-6 py-8">
           {/* Greeting */}
-          <div className="mb-8">
+          <div ref={greetingRef} className="mb-8 opacity-0">
             <h1 className="text-2xl font-bold text-white">
               Hey, <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-fuchsia-400">{displayName}</span>
             </h1>
@@ -164,24 +242,13 @@ export function HubView({ user, onLogout }: HubViewProps) {
           </div>
 
           {loading ? (
-            <div className="flex items-center gap-3 text-zinc-500 py-16 justify-center">
-              <Loader2 className="w-5 h-5 animate-spin text-orange-400" />
-              <span className="text-sm">Loading your library...</span>
-            </div>
+            <LoadingState />
           ) : fetchError ? (
-            <div className="flex flex-col items-center gap-4 py-16 text-center">
-              <div className="w-12 h-12 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center">
-                <AlertCircle className="w-5 h-5 text-red-400" />
-              </div>
-              <p className="text-sm text-zinc-400">{fetchError}</p>
-              <button onClick={loadProducts} className="flex items-center gap-1.5 px-4 py-2 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-zinc-300 text-sm rounded-lg transition-colors">
-                <RefreshCw className="w-3.5 h-3.5" />Retry
-              </button>
-            </div>
+            <ErrorState error={fetchError} onRetry={loadProducts} />
           ) : products.length === 0 ? (
             <EmptyState />
           ) : (
-            <div className="space-y-4">
+            <div ref={cardsRef} className="space-y-4">
               {products.map((product) => (
                 <ProductCard
                   key={product.id}
@@ -201,6 +268,69 @@ export function HubView({ user, onLogout }: HubViewProps) {
   )
 }
 
+function LoadingState() {
+  const ref = useRef<HTMLDivElement>(null)
+  const dotsRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    anime({
+      targets: ref.current,
+      opacity: [0, 1],
+      translateY: [20, 0],
+      duration: 500,
+      easing: 'easeOutCubic',
+    })
+    if (dotsRef.current) {
+      anime({
+        targets: dotsRef.current.children,
+        scale: [0.5, 1.2, 0.5],
+        opacity: [0.3, 1, 0.3],
+        duration: 1200,
+        delay: anime.stagger(200),
+        loop: true,
+        easing: 'easeInOutSine',
+      })
+    }
+  }, [])
+
+  return (
+    <div ref={ref} className="flex flex-col items-center gap-4 py-16 opacity-0">
+      <div ref={dotsRef} className="flex gap-2">
+        <div className="w-2.5 h-2.5 rounded-full bg-orange-500" />
+        <div className="w-2.5 h-2.5 rounded-full bg-fuchsia-500" />
+        <div className="w-2.5 h-2.5 rounded-full bg-violet-500" />
+      </div>
+      <span className="text-sm text-zinc-500">Loading your library...</span>
+    </div>
+  )
+}
+
+function ErrorState({ error, onRetry }: { error: string; onRetry: () => void }) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    anime({
+      targets: ref.current,
+      opacity: [0, 1],
+      scale: [0.9, 1],
+      duration: 500,
+      easing: 'easeOutCubic',
+    })
+  }, [])
+
+  return (
+    <div ref={ref} className="flex flex-col items-center gap-4 py-16 text-center opacity-0">
+      <div className="w-12 h-12 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+        <AlertCircle className="w-5 h-5 text-red-400" />
+      </div>
+      <p className="text-sm text-zinc-400">{error}</p>
+      <button onClick={onRetry} className="flex items-center gap-1.5 px-4 py-2 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-zinc-300 text-sm rounded-lg transition-colors">
+        <RefreshCw className="w-3.5 h-3.5" />Retry
+      </button>
+    </div>
+  )
+}
+
 function ProductCard({ product, downloads, installedVersion, onDownload, onOpenFolder, onUninstall }: {
   product: Product; downloads: DlMap; installedVersion: string | null
   onDownload: (platform: string, url: string) => void; onOpenFolder: () => void; onUninstall: () => void
@@ -216,12 +346,146 @@ function ProductCard({ product, downloads, installedVersion, onDownload, onOpenF
   const hasUpdate = installedVersion ? installedVersion !== product.version : false
   const showInstalled = sessionInstalled || (isInstalled && !hasUpdate && status === 'idle')
 
+  const cardRef = useRef<HTMLDivElement>(null)
+  const iconRef = useRef<HTMLDivElement>(null)
+  const installedRef = useRef<HTMLDivElement>(null)
+  const prevStatus = useRef(status)
+  const justInstalled = useRef(false)
+
+  // Track if we just transitioned to installed (before paint)
+  useLayoutEffect(() => {
+    if (prevStatus.current !== status) {
+      if (status === 'installed') {
+        justInstalled.current = true
+        // Hide the installed UI before browser paints
+        if (installedRef.current) {
+          installedRef.current.style.opacity = '0'
+        }
+      }
+    }
+  }, [status])
+
+  // Run animations after paint
+  useEffect(() => {
+    if (prevStatus.current !== status) {
+      if (status === 'installed' && cardRef.current) {
+        const tl = anime.timeline({ easing: 'easeOutCubic' })
+
+        // Gentle green glow on card
+        tl.add({
+          targets: cardRef.current,
+          borderColor: ['rgba(255,255,255,0.06)', 'rgba(16,185,129,0.3)', 'rgba(16,185,129,0.12)'],
+          boxShadow: ['0 0 0px rgba(16,185,129,0)', '0 0 20px rgba(16,185,129,0.1)', '0 0 0px rgba(16,185,129,0)'],
+          duration: 1500,
+          easing: 'easeOutQuad',
+        }, 0)
+
+        // Entire installed row fades in
+        if (installedRef.current) {
+          tl.add({
+            targets: installedRef.current,
+            opacity: [0, 1],
+            translateY: [8, 0],
+            duration: 400,
+            easing: 'easeOutCubic',
+          }, 100)
+        }
+
+        // Stop icon pulse
+        if (iconRef.current) {
+          anime.remove(iconRef.current)
+          anime({
+            targets: iconRef.current,
+            scale: 1,
+            duration: 300,
+            easing: 'easeOutCubic',
+          })
+        }
+
+        justInstalled.current = false
+      }
+      if (status === 'error' && cardRef.current) {
+        anime({
+          targets: cardRef.current,
+          translateX: [0, -8, 8, -6, 6, -3, 3, 0],
+          duration: 500,
+          easing: 'easeInOutQuad',
+        })
+        if (iconRef.current) {
+          anime.remove(iconRef.current)
+          anime({
+            targets: iconRef.current,
+            scale: 1,
+            duration: 300,
+            easing: 'easeOutCubic',
+          })
+        }
+      }
+      if (status === 'downloading' && iconRef.current) {
+        anime({
+          targets: iconRef.current,
+          scale: [1, 1.08, 1],
+          duration: 1200,
+          easing: 'easeInOutSine',
+          loop: true,
+        })
+      }
+      prevStatus.current = status
+    }
+  }, [status])
+
+  // Hover interaction — subtle lift
+  const handleMouseEnter = () => {
+    if (cardRef.current && !inProgress) {
+      anime({
+        targets: cardRef.current,
+        translateY: -1,
+        duration: 250,
+        easing: 'easeOutCubic',
+      })
+    }
+    if (iconRef.current && !inProgress) {
+      anime({
+        targets: iconRef.current,
+        scale: 1.05,
+        rotate: '3deg',
+        duration: 250,
+        easing: 'easeOutCubic',
+      })
+    }
+  }
+  const handleMouseLeave = () => {
+    if (cardRef.current && !inProgress) {
+      anime({
+        targets: cardRef.current,
+        translateY: 0,
+        duration: 250,
+        easing: 'easeOutCubic',
+      })
+    }
+    if (iconRef.current && !inProgress) {
+      anime.remove(iconRef.current)
+      anime({
+        targets: iconRef.current,
+        scale: 1,
+        rotate: '0deg',
+        duration: 250,
+        easing: 'easeOutCubic',
+      })
+    }
+  }
+
   return (
-    <div className="bg-white/[0.03] rounded-2xl border border-white/[0.06] hover:border-white/[0.10] transition-all overflow-hidden glow-orange backdrop-blur-sm">
+    <div
+      ref={cardRef}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      className="bg-white/[0.03] rounded-2xl border border-white/[0.06] transition-colors overflow-hidden backdrop-blur-sm opacity-0"
+    >
       <div className="p-5">
         {/* Product header */}
         <div className="flex items-start gap-4">
-          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-orange-500/20 to-fuchsia-500/10 border border-orange-500/20 flex items-center justify-center flex-shrink-0">
+          <div ref={iconRef} className="w-12 h-12 rounded-xl bg-gradient-to-br from-orange-500/20 to-fuchsia-500/10 border border-orange-500/20 flex items-center justify-center flex-shrink-0">
             <Package className="w-5 h-5 text-orange-400" />
           </div>
           <div className="flex-1 min-w-0">
@@ -264,7 +528,7 @@ function ProductCard({ product, downloads, installedVersion, onDownload, onOpenF
                 <Loader2 className="w-4 h-4 text-orange-400 animate-spin flex-shrink-0" />
               </div>
             ) : showInstalled ? (
-              <>
+              <div ref={installedRef} className="flex items-center gap-3 flex-1">
                 <div className="flex items-center gap-2 flex-1">
                   <CheckCircle className="w-4 h-4 text-emerald-400" />
                   <span className="text-sm text-emerald-400 font-medium">Installed</span>
@@ -275,7 +539,7 @@ function ProductCard({ product, downloads, installedVersion, onDownload, onOpenF
                 <button onClick={onOpenFolder} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-xs text-zinc-400 hover:text-white transition-all">
                   <FolderOpen className="w-3.5 h-3.5" />Open Folder
                 </button>
-              </>
+              </div>
             ) : hasUpdate ? (
               <>
                 <div className="flex items-center gap-2 flex-1">
@@ -320,9 +584,30 @@ function formatBytes(bytes: number): string {
 }
 
 function EmptyState() {
+  const ref = useRef<HTMLDivElement>(null)
+  const iconRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    anime({
+      targets: ref.current,
+      opacity: [0, 1],
+      translateY: [30, 0],
+      duration: 700,
+      easing: 'easeOutCubic',
+    })
+    anime({
+      targets: iconRef.current,
+      scale: [0, 1],
+      rotate: ['-20deg', '0deg'],
+      duration: 800,
+      easing: 'easeOutElastic(1, 0.6)',
+      delay: 200,
+    })
+  }, [])
+
   return (
-    <div className="flex flex-col items-center justify-center py-20 text-center">
-      <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-orange-500/10 to-fuchsia-500/10 border border-orange-500/20 flex items-center justify-center mb-5">
+    <div ref={ref} className="flex flex-col items-center justify-center py-20 text-center opacity-0">
+      <div ref={iconRef} className="w-16 h-16 rounded-2xl bg-gradient-to-br from-orange-500/10 to-fuchsia-500/10 border border-orange-500/20 flex items-center justify-center mb-5">
         <Package className="w-7 h-7 text-orange-400/60" />
       </div>
       <h3 className="text-base font-semibold text-white mb-2">No purchases yet</h3>

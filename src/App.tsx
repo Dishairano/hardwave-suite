@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { LoginScreen } from './components/LoginScreen'
+import { SplashScreen } from './components/SplashScreen'
 import { Onboarding } from './components/Onboarding'
 import { HubView } from './views/HubView'
 import { UpdateModal } from './components/UpdateModal'
 import * as api from './lib/api'
+import type { Product } from './lib/api'
 
 interface UpdateInfo {
   version: string
@@ -19,8 +21,11 @@ interface UpdateInfo {
 
 export default function App() {
   const [user, setUser] = useState<api.User | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [showSplash, setShowSplash] = useState(true)
   const [showOnboarding, setShowOnboarding] = useState(false)
+  const [dataReady, setDataReady] = useState(false)
+  const [preloadedProducts, setPreloadedProducts] = useState<Product[] | null>(null)
+  const [preloadedVersions, setPreloadedVersions] = useState<Record<string, string> | null>(null)
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo>({
     version: '',
     changelog: '',
@@ -32,24 +37,53 @@ export default function App() {
     downloaded: false,
     error: null,
   })
+  const initRan = useRef(false)
 
   useEffect(() => {
+    if (initRan.current) return
+    initRan.current = true
+
     const init = async () => {
       const saved = api.loadSession()
+      let authenticated = false
+
       if (saved) {
         try {
           await api.setToken(saved.token)
           const valid = await api.getAuthStatus()
           if (valid) {
             setUser(saved.user)
+            authenticated = true
+            if (!localStorage.getItem('hw_onboarding_done')) {
+              setShowOnboarding(true)
+            }
           } else {
             api.clearSession()
           }
         } catch {
           setUser(saved.user)
+          authenticated = true
+          if (!localStorage.getItem('hw_onboarding_done')) {
+            setShowOnboarding(true)
+          }
         }
       }
-      setLoading(false)
+
+      // Preload products if authenticated
+      if (authenticated) {
+        try {
+          const [prods, installed] = await Promise.all([
+            api.getProducts(),
+            api.getInstalledVersions().catch(() => ({} as Record<string, string>)),
+          ])
+          setPreloadedProducts(prods)
+          setPreloadedVersions(installed)
+        } catch {
+          // Products will load in HubView as fallback
+        }
+      }
+
+      setDataReady(true)
       checkForUpdates()
     }
     init()
@@ -125,12 +159,12 @@ export default function App() {
     setUser(null)
   }
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-[#08080c]">
-        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-orange-500 to-fuchsia-600 animate-pulse" />
-      </div>
-    )
+  const handleSplashFinished = useCallback(() => {
+    setShowSplash(false)
+  }, [])
+
+  if (showSplash) {
+    return <SplashScreen dataReady={dataReady} onFinished={handleSplashFinished} />
   }
 
   if (!user) {
@@ -143,7 +177,7 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">
-      <HubView user={user} onLogout={handleLogout} />
+      <HubView user={user} onLogout={handleLogout} preloadedProducts={preloadedProducts} preloadedVersions={preloadedVersions} />
 
       {updateInfo.available && !updateInfo.dismissed && (
         <UpdateModal
