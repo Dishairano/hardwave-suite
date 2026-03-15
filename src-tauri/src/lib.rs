@@ -209,6 +209,177 @@ async fn get_purchases(state: State<'_, AppState>) -> Result<Vec<models::Product
     api::get_downloads(&token).await
 }
 
+/// Download a file with resume support and automatic retries.
+/// Returns (tmp_path, total_bytes_downloaded).
+async fn download_with_resume(
+    url: &str,
+    token: &Option<String>,
+    filename: &str,
+    file_id: &str,
+    app: &tauri::AppHandle,
+) -> Result<(std::path::PathBuf, u64), String> {
+    use std::time::Duration;
+
+    let tmp_path = std::env::temp_dir().join(filename);
+    let part_path = std::env::temp_dir().join(format!("{}.part", filename));
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(300))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    const MAX_RETRIES: u32 = 3;
+    let mut attempt = 0;
+
+    loop {
+        // Check how much we already have from a previous (partial) download
+        let existing_bytes = tokio::fs::metadata(&part_path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+
+        // Build request with Range header if resuming
+        let mut req = client.get(url);
+        if let Some(t) = token {
+            req = req.bearer_auth(t);
+        }
+        if existing_bytes > 0 {
+            req = req.header("Range", format!("bytes={}-", existing_bytes));
+        }
+
+        let res = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                attempt += 1;
+                if attempt >= MAX_RETRIES {
+                    return Err(format!("Download failed after {} attempts: {}", MAX_RETRIES, e));
+                }
+                let delay = Duration::from_secs(2u64.pow(attempt));
+                let _ = app.emit(
+                    "dl:progress",
+                    DownloadProgress {
+                        file_id: file_id.to_string(),
+                        percent: 0,
+                        downloaded: existing_bytes,
+                        total: 0,
+                        status: "downloading".into(),
+                        install_path: None,
+                    },
+                );
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+        };
+
+        let status_code = res.status();
+
+        // Determine if server supports resume
+        let (total, mut downloaded, append) = if status_code == reqwest::StatusCode::PARTIAL_CONTENT {
+            // Server accepted our Range request
+            let content_range = res
+                .headers()
+                .get("content-range")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            // Parse "bytes START-END/TOTAL"
+            let total = content_range
+                .split('/')
+                .last()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            (total, existing_bytes, true)
+        } else if status_code.is_success() {
+            // Server doesn't support Range or fresh download
+            let total = res.content_length().unwrap_or(0);
+            (total, 0u64, false)
+        } else {
+            attempt += 1;
+            if attempt >= MAX_RETRIES {
+                return Err(format!("Download failed: HTTP {}", status_code));
+            }
+            let delay = Duration::from_secs(2u64.pow(attempt));
+            tokio::time::sleep(delay).await;
+            continue;
+        };
+
+        // Open file for writing (append if resuming, create if fresh)
+        let mut tmp_file = if append {
+            tokio::fs::OpenOptions::new()
+                .append(true)
+                .open(&part_path)
+                .await
+                .map_err(|e| format!("Failed to open partial file: {}", e))?
+        } else {
+            tokio::fs::File::create(&part_path)
+                .await
+                .map_err(|e| format!("Failed to create download file: {}", e))?
+        };
+
+        let mut stream = res.bytes_stream();
+        let mut chunk_error = false;
+
+        while let Some(chunk_result) = stream.next().await {
+            match chunk_result {
+                Ok(chunk) => {
+                    if let Err(e) = tmp_file.write_all(&chunk).await {
+                        return Err(format!("Failed to write to disk: {}", e));
+                    }
+                    downloaded += chunk.len() as u64;
+
+                    let percent = if total > 0 {
+                        ((downloaded as f64 / total as f64) * 100.0) as u8
+                    } else {
+                        0
+                    };
+
+                    let _ = app.emit(
+                        "dl:progress",
+                        DownloadProgress {
+                            file_id: file_id.to_string(),
+                            percent,
+                            downloaded,
+                            total,
+                            status: "downloading".into(),
+                            install_path: None,
+                        },
+                    );
+                }
+                Err(_) => {
+                    // Network error mid-stream — flush what we have and retry
+                    let _ = tmp_file.flush().await;
+                    drop(tmp_file);
+                    chunk_error = true;
+                    break;
+                }
+            }
+        }
+
+        if chunk_error {
+            attempt += 1;
+            if attempt >= MAX_RETRIES {
+                return Err(format!(
+                    "Download failed after {} attempts (connection lost at {}%)",
+                    MAX_RETRIES,
+                    if total > 0 { (downloaded * 100 / total) as u32 } else { 0 }
+                ));
+            }
+            let delay = std::time::Duration::from_secs(2u64.pow(attempt));
+            tokio::time::sleep(delay).await;
+            continue;
+        }
+
+        // Download complete — flush and rename .part to final
+        tmp_file.flush().await.map_err(|e| e.to_string())?;
+        drop(tmp_file);
+        tokio::fs::rename(&part_path, &tmp_path)
+            .await
+            .map_err(|e| format!("Failed to finalize download: {}", e))?;
+
+        return Ok((tmp_path, downloaded));
+    }
+}
+
 #[tauri::command]
 async fn download_and_install(
     file_id: String,
@@ -223,54 +394,9 @@ async fn download_and_install(
 ) -> Result<String, String> {
     let token = state.api_token.lock().unwrap().clone();
 
-    let client = reqwest::Client::new();
-    let mut req = client.get(&url);
-    if let Some(t) = token {
-        req = req.bearer_auth(t);
-    }
+    let (tmp_path, downloaded) = download_with_resume(&url, &token, &filename, &file_id, &app).await?;
 
-    let res = req.send().await.map_err(|e| format!("Download request failed: {}", e))?;
-
-    if !res.status().is_success() {
-        return Err(format!("Download failed: HTTP {}", res.status()));
-    }
-
-    let total = res.content_length().unwrap_or(0);
-
-    let tmp_path = std::env::temp_dir().join(&filename);
-    let mut tmp_file = tokio::fs::File::create(&tmp_path)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let mut downloaded: u64 = 0;
-    let mut stream = res.bytes_stream();
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| e.to_string())?;
-        tmp_file.write_all(&chunk).await.map_err(|e| e.to_string())?;
-        downloaded += chunk.len() as u64;
-
-        let percent = if total > 0 {
-            ((downloaded as f64 / total as f64) * 100.0) as u8
-        } else {
-            0
-        };
-
-        let _ = app.emit(
-            "dl:progress",
-            DownloadProgress {
-                file_id: file_id.clone(),
-                percent,
-                downloaded,
-                total,
-                status: "downloading".into(),
-                install_path: None,
-            },
-        );
-    }
-
-    tmp_file.flush().await.map_err(|e| e.to_string())?;
-    drop(tmp_file);
+    let total = downloaded;
 
     // Emit installing status
     let _ = app.emit(
