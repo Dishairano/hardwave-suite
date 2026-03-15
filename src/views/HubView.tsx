@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useReducer, useCallback, useState, useRef } from 'react'
-import { Download, Package, FolderOpen, CheckCircle, Loader2, AlertCircle, LogOut, RefreshCw, ArrowUpCircle, Trash2, Settings } from 'lucide-react'
+import { Download, Package, FolderOpen, CheckCircle, Loader2, AlertCircle, LogOut, RefreshCw, ArrowUpCircle, Trash2, Settings, Music } from 'lucide-react'
 import { SettingsPanel } from '../components/SettingsPanel'
 import { getVersion } from '@tauri-apps/api/app'
 import anime from 'animejs'
@@ -346,8 +346,11 @@ function ProductCard({ product, downloads, installedVersion, onDownload, onOpenF
   product: Product; downloads: DlMap; installedVersion: string | null
   onDownload: (platform: string, url: string) => void; onOpenFolder: () => void; onUninstall: () => void
 }) {
+  const isSample = product.category === 'sample' || product.category === 'preset'
   const currentPlatform = detectPlatform()
-  const platformUrl = product.downloads[currentPlatform]
+  const platformUrl = isSample
+    ? (product.downloads[currentPlatform] || product.downloads.windows || product.downloads.mac || product.downloads.linux)
+    : product.downloads[currentPlatform]
   const fileId = `${product.id}-${currentPlatform}`
   const dlState = downloads[fileId]
   const status = dlState?.status ?? 'idle'
@@ -496,15 +499,19 @@ function ProductCard({ product, downloads, installedVersion, onDownload, onOpenF
       <div className="p-5">
         {/* Product header */}
         <div className="flex items-start gap-4">
-          <div ref={iconRef} className="w-12 h-12 rounded-xl bg-gradient-to-br from-orange-500/20 to-fuchsia-500/10 border border-orange-500/20 flex items-center justify-center flex-shrink-0">
-            <Package className="w-5 h-5 text-orange-400" />
+          <div ref={iconRef} className={`w-12 h-12 rounded-xl bg-gradient-to-br ${isSample ? 'from-violet-500/20 to-blue-500/10 border-violet-500/20' : 'from-orange-500/20 to-fuchsia-500/10 border-orange-500/20'} border flex items-center justify-center flex-shrink-0`}>
+            {isSample ? <Music className="w-5 h-5 text-violet-400" /> : <Package className="w-5 h-5 text-orange-400" />}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex flex-wrap items-center gap-2 mb-0.5">
               <h3 className="text-sm font-semibold text-white">{product.name}</h3>
-              {(product.formats?.length ? product.formats : ['VST3']).map((fmt) => (
-                <span key={fmt} className="text-[10px] font-medium border rounded-full px-2 py-0.5 text-fuchsia-400 bg-fuchsia-500/10 border-fuchsia-500/20">{fmt}</span>
-              ))}
+              {isSample ? (
+                <span className="text-[10px] font-medium border rounded-full px-2 py-0.5 text-violet-400 bg-violet-500/10 border-violet-500/20">Sample Pack</span>
+              ) : (
+                (product.formats?.length ? product.formats : ['VST3']).map((fmt) => (
+                  <span key={fmt} className="text-[10px] font-medium border rounded-full px-2 py-0.5 text-fuchsia-400 bg-fuchsia-500/10 border-fuchsia-500/20">{fmt}</span>
+                ))
+              )}
             </div>
             <div className="text-[11px] text-zinc-600 font-mono mb-1">
               {hasUpdate ? (
@@ -512,7 +519,7 @@ function ProductCard({ product, downloads, installedVersion, onDownload, onOpenF
               ) : (
                 <>v{product.version}</>
               )}
-              <span className="ml-2 text-zinc-600">{platformLabels[currentPlatform]}</span>
+              {!isSample && <span className="ml-2 text-zinc-600">{platformLabels[currentPlatform]}</span>}
             </div>
             <p className="text-xs text-zinc-500 leading-relaxed line-clamp-2">{product.description}</p>
           </div>
@@ -569,7 +576,7 @@ function ProductCard({ product, downloads, installedVersion, onDownload, onOpenF
               </>
             ) : (
               <button onClick={() => onDownload(currentPlatform, platformUrl)} className="flex items-center gap-2 px-4 py-2 ml-auto bg-gradient-to-r from-orange-500 to-fuchsia-600 hover:from-orange-400 hover:to-fuchsia-500 text-white text-sm font-medium rounded-lg transition-all shadow-md shadow-orange-500/20">
-                <Download className="w-4 h-4" />{status === 'error' ? 'Retry' : `Install for ${platformLabels[currentPlatform]}`}
+                <Download className="w-4 h-4" />{status === 'error' ? 'Retry' : isSample ? 'Download' : `Install for ${platformLabels[currentPlatform]}`}
               </button>
             )}
           </div>
