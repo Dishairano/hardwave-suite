@@ -141,36 +141,47 @@ jobs:
             src-tauri/target/release/bundle/appimage/*.AppImage.sig
             src-tauri/target/release/bundle/deb/*.deb
 
-  update-manifest:
+  deploy-update:
     needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate and upload updater manifest
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          mkdir -p /tmp/release-assets /tmp/sigs /tmp/sigs-mac /tmp/sigs-linux
+
+          # Download updater binaries + signatures
+          gh release download "${TAG}" -p "*.exe" -p "*.exe.sig" -D /tmp/release-assets 2>/dev/null || true
+          gh release download "${TAG}" -p "*.app.tar.gz" -p "*.app.tar.gz.sig" -D /tmp/release-assets 2>/dev/null || true
+          gh release download "${TAG}" -p "*.AppImage" -p "*.AppImage.sig" -D /tmp/release-assets 2>/dev/null || true
+
+          ls -la /tmp/release-assets/
+
+      - name: Generate updater manifest
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           TAG="${GITHUB_REF_NAME}"
-          REPO="Dishairano/hardwave-suite"
-          BASE="https://github.com/${REPO}/releases/download/${TAG}"
+          BASE="https://hardwavestudios.com/downloads/suite"
           DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           NOTES=$(gh release view "${TAG}" --json body -q '.body' 2>/dev/null || echo "Bug fixes and improvements")
 
-          # Fetch signatures from release assets
-          mkdir -p /tmp/sigs /tmp/sigs-mac /tmp/sigs-linux
-          WIN_SIG=$(gh release download "${TAG}" -p "*.exe.sig" -D /tmp/sigs 2>/dev/null && cat /tmp/sigs/*.exe.sig || echo "")
-          MAC_SIG=$(gh release download "${TAG}" -p "*.app.tar.gz.sig" -D /tmp/sigs-mac 2>/dev/null && cat /tmp/sigs-mac/*.app.tar.gz.sig || echo "")
-          LINUX_SIG=$(gh release download "${TAG}" -p "*.AppImage.sig" -D /tmp/sigs-linux 2>/dev/null && cat /tmp/sigs-linux/*.AppImage.sig || echo "")
+          # Read signatures from downloaded assets
+          WIN_SIG=$(cat /tmp/release-assets/*.exe.sig 2>/dev/null || echo "")
+          MAC_SIG=$(cat /tmp/release-assets/*.app.tar.gz.sig 2>/dev/null || echo "")
+          LINUX_SIG=$(cat /tmp/release-assets/*.AppImage.sig 2>/dev/null || echo "")
 
-          # Build latest.json
+          # Build latest.json with hardwavestudios.com URLs
           python3 -c "
-          import json, sys
-          notes = '''${NOTES}'''
+          import json
           manifest = {
             'version': '${VERSION}',
-            'notes': notes.strip() if notes.strip() else 'Bug fixes and improvements',
+            'notes': '''${NOTES}'''.strip() or 'Bug fixes and improvements',
             'pub_date': '${DATE}',
             'platforms': {
               'windows-x86_64': {
@@ -191,5 +202,35 @@ jobs:
             json.dump(manifest, f, indent=2)
           "
 
-          # Upload as release asset (serves as updater endpoint)
+          cat /tmp/latest.json
+
+          # Also upload to GitHub release as asset
           gh release upload "${TAG}" /tmp/latest.json --clobber
+
+      - name: Deploy to hardwavestudios.com
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          # Set up SSH
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H 46.225.219.184 >> ~/.ssh/known_hosts 2>/dev/null
+
+          REMOTE="root@46.225.219.184"
+          SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+          SCP="scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+
+          # Create release directory on server
+          $SSH $REMOTE "mkdir -p /opt/hardwave/public-downloads/suite-releases"
+
+          # Upload binaries (only updater-relevant files: .exe, .app.tar.gz, .AppImage + sigs)
+          $SCP /tmp/release-assets/* $REMOTE:/opt/hardwave/public-downloads/suite-releases/
+
+          # Upload manifest
+          $SCP /tmp/latest.json $REMOTE:/opt/hardwave/public-downloads/hardwave-suite-latest.json
+
+          echo "Deployed to hardwavestudios.com"
+
+          # Clean up
+          rm -f ~/.ssh/deploy_key
