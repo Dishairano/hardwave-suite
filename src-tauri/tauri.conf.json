@@ -7,7 +7,7 @@
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "",
     "devUrl": "http://localhost:1420",
-    "frontendDist": "http://178.104.2.34"
+    "frontendDist": "https://suite.hardwavestudios.com"
   },
   "app": {
     "windows": [
