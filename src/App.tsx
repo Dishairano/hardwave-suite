@@ -59,6 +59,7 @@ export default function App() {
             }
           } else {
             api.clearSession()
+            try { await api.logout() } catch { /* clear shared token */ }
           }
         } catch {
           setUser(saved.user)

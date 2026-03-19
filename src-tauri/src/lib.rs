@@ -28,6 +28,33 @@ fn settings_path() -> std::path::PathBuf {
     data_dir().join("settings.json")
 }
 
+/// Shared auth token path — VST plugins read from here on editor open.
+/// Uses `dirs::data_dir()` (not `data_local_dir()`) to match the VST plugin's
+/// `auth.rs` which uses `dirs::data_dir().join("hardwave/auth_token")`.
+fn shared_vst_token_path() -> Option<std::path::PathBuf> {
+    dirs::data_dir().map(|d| d.join("hardwave").join("auth_token"))
+}
+
+/// Write or clear the shared auth token file so VST plugins pick it up
+/// without requiring a separate login.
+fn sync_vst_token(token: Option<&str>) {
+    if let Some(path) = shared_vst_token_path() {
+        match token {
+            Some(t) => {
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(&path, t);
+            }
+            None => {
+                if path.exists() {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+    }
+}
+
 /// Read settings from disk.
 fn read_settings() -> std::collections::HashMap<String, String> {
     let path = settings_path();
@@ -205,6 +232,7 @@ async fn login(
     if res.success {
         if let Some(ref token) = res.token {
             *state.api_token.lock().unwrap() = Some(token.clone());
+            sync_vst_token(Some(token));
         }
     }
     Ok(res)
@@ -217,6 +245,7 @@ async fn logout(state: State<'_, AppState>) -> Result<(), String> {
         let _ = api::logout(&t).await;
     }
     *state.api_token.lock().unwrap() = None;
+    sync_vst_token(None);
     Ok(())
 }
 
@@ -231,7 +260,8 @@ async fn get_auth_status(state: State<'_, AppState>) -> Result<bool, String> {
 
 #[tauri::command]
 async fn set_token(token: String, state: State<'_, AppState>) -> Result<(), String> {
-    *state.api_token.lock().unwrap() = Some(token);
+    *state.api_token.lock().unwrap() = Some(token.clone());
+    sync_vst_token(Some(&token));
     Ok(())
 }
 
