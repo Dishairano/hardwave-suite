@@ -24,10 +24,6 @@ html, body, #root {
 .drag { -webkit-app-region: drag; }
 .no-drag { -webkit-app-region: no-drag; }
 
-.glow-orange {
-  box-shadow: 0 0 40px rgba(255, 165, 0, 0.08), 0 0 80px rgba(255, 165, 0, 0.04);
-}
-
-.glow-fuchsia {
-  box-shadow: 0 0 40px rgba(225, 42, 251, 0.08), 0 0 80px rgba(225, 42, 251, 0.04);
+.glow-red {
+  box-shadow: 0 0 40px rgba(220, 38, 38, 0.08), 0 0 80px rgba(220, 38, 38, 0.04);
 }
