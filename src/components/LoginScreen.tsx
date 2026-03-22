@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, FormEvent } from 'react'
 import { Loader2 } from 'lucide-react'
 import anime from 'animejs'
+import { HwLogo } from './HwLogo'
 
 interface LoginScreenProps {
   onLogin: (email: string, password: string, rememberMe: boolean) => Promise<void>
@@ -152,11 +153,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
       <div className="relative w-full max-w-sm mx-4">
         {/* Logo & Title */}
         <div className="flex flex-col items-center mb-8">
-          <div ref={logoRef} className="w-16 h-16 rounded-2xl bg-gradient-to-br from-orange-500 to-fuchsia-600 flex items-center justify-center mb-4 opacity-0">
-            <svg className="w-8 h-8 text-white" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
-            </svg>
-          </div>
+          <HwLogo ref={logoRef} size={64} className="mb-4 opacity-0" />
           <h1 ref={titleRef} className="text-2xl font-bold text-white opacity-0">Hardwave Suite</h1>
           <p ref={subtitleRef} className="text-sm text-zinc-500 mt-1 opacity-0">Sign in to access your library</p>
         </div>

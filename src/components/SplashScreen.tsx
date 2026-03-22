@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import anime from 'animejs'
+import { HwLogo } from './HwLogo'
 
 interface SplashScreenProps {
   dataReady: boolean
@@ -212,36 +213,21 @@ export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
       </div>
 
       {/* Background glows */}
-      <div ref={glow1Ref} className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] rounded-full bg-orange-500/[0.08] blur-[120px] opacity-0" />
-      <div ref={glow2Ref} className="absolute top-1/2 left-1/2 -translate-x-[40%] -translate-y-[60%] w-[400px] h-[400px] rounded-full bg-fuchsia-500/[0.08] blur-[120px] opacity-0" />
+      <div ref={glow1Ref} className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] rounded-full bg-red-600/[0.08] blur-[120px] opacity-0" />
+      <div ref={glow2Ref} className="absolute top-1/2 left-1/2 -translate-x-[40%] -translate-y-[60%] w-[400px] h-[400px] rounded-full bg-red-500/[0.05] blur-[120px] opacity-0" />
 
       {/* Center content */}
       <div className="relative flex flex-col items-center">
-        <div ref={ring1Ref} className="absolute w-24 h-24 rounded-full border-2 border-orange-500/40 opacity-0" style={{ top: '0' }} />
-        <div ref={ring2Ref} className="absolute w-24 h-24 rounded-full border-2 border-fuchsia-500/30 opacity-0" style={{ top: '0' }} />
+        <div ref={ring1Ref} className="absolute w-24 h-24 rounded-full border-2 border-red-600/40 opacity-0" style={{ top: '0' }} />
+        <div ref={ring2Ref} className="absolute w-24 h-24 rounded-full border-2 border-red-500/20 opacity-0" style={{ top: '0' }} />
 
-        <div
-          ref={logoRef}
-          className="w-24 h-24 rounded-3xl bg-gradient-to-br from-orange-500 to-fuchsia-600 flex items-center justify-center relative overflow-hidden opacity-0"
-        >
-          <svg className="w-12 h-12 text-white relative z-10" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
-          </svg>
-          <div
-            ref={shineRef}
-            className="absolute inset-0 z-20"
-            style={{
-              background: 'linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.25) 50%, transparent 70%)',
-              transform: 'translateX(-200%)',
-            }}
-          />
-        </div>
+        <HwLogo ref={logoRef} size={96} className="opacity-0" />
 
         <h1 ref={titleRef} className="text-3xl font-bold text-white mt-6 opacity-0">Hardwave Suite</h1>
         <p ref={subtitleRef} className="text-sm text-zinc-500 mt-2 opacity-0">Audio Production Hub</p>
 
         <div ref={barRef} className="mt-8 w-[200px] h-0.5 bg-white/[0.06] rounded-full overflow-hidden opacity-0">
-          <div ref={barFillRef} className="h-full bg-gradient-to-r from-orange-500 to-fuchsia-500 rounded-full" style={{ width: '0%' }} />
+          <div ref={barFillRef} className="h-full bg-gradient-to-r from-red-700 to-red-500 rounded-full" style={{ width: '0%' }} />
         </div>
       </div>
     </div>
