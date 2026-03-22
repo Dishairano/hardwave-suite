@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useReducer, useCallback, useState, useRef } from 'react'
 import { Download, Package, FolderOpen, CheckCircle, Loader2, AlertCircle, LogOut, RefreshCw, ArrowUpCircle, Trash2, Settings, Music } from 'lucide-react'
 import { SettingsPanel } from '../components/SettingsPanel'
+import { HwLogo } from '../components/HwLogo'
 import { getVersion } from '@tauri-apps/api/app'
 import anime from 'animejs'
 import * as api from '../lib/api'
@@ -202,18 +203,14 @@ export function HubView({ user, onLogout, preloadedProducts, preloadedVersions }
     <div className="flex flex-col flex-1 overflow-hidden bg-[#08080c] relative">
       {/* Background ambient glow */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        <div ref={glow1Ref} className="absolute -top-32 -right-32 w-[500px] h-[500px] bg-orange-500/[0.03] rounded-full blur-[120px] opacity-0" />
-        <div ref={glow2Ref} className="absolute -bottom-32 -left-32 w-[400px] h-[400px] bg-fuchsia-500/[0.03] rounded-full blur-[120px] opacity-0" />
+        <div ref={glow1Ref} className="absolute -top-32 -right-32 w-[500px] h-[500px] bg-red-600/[0.03] rounded-full blur-[120px] opacity-0" />
+        <div ref={glow2Ref} className="absolute -bottom-32 -left-32 w-[400px] h-[400px] bg-red-600/[0.03] rounded-full blur-[120px] opacity-0" />
       </div>
 
       {/* Header */}
       <header ref={headerRef} className="relative flex items-center gap-3 px-5 h-14 bg-white/[0.02] border-b border-white/[0.06] flex-shrink-0 drag backdrop-blur-md opacity-0">
         <div className="flex items-center gap-2.5 no-drag">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 to-fuchsia-600 flex items-center justify-center shadow-lg shadow-orange-500/15">
-            <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
-            </svg>
-          </div>
+          <HwLogo size={32} />
           <div>
             <span className="text-sm font-semibold text-white">Hardwave Suite</span>
             {appVersion && <span className="ml-1.5 text-[10px] text-zinc-600 font-mono">v{appVersion}</span>}
@@ -247,7 +244,7 @@ export function HubView({ user, onLogout, preloadedProducts, preloadedVersions }
           {/* Greeting */}
           <div ref={greetingRef} className="mb-8 opacity-0">
             <h1 className="text-2xl font-bold text-white">
-              Hey, <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-fuchsia-400">{displayName}</span>
+              Hey, <span className="text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-red-400">{displayName}</span>
             </h1>
             <p className="text-sm text-zinc-500 mt-1">Your products are ready to download and install.</p>
           </div>
@@ -307,8 +304,8 @@ function LoadingState() {
   return (
     <div ref={ref} className="flex flex-col items-center gap-4 py-16 opacity-0">
       <div ref={dotsRef} className="flex gap-2">
-        <div className="w-2.5 h-2.5 rounded-full bg-orange-500" />
-        <div className="w-2.5 h-2.5 rounded-full bg-fuchsia-500" />
+        <div className="w-2.5 h-2.5 rounded-full bg-red-600" />
+        <div className="w-2.5 h-2.5 rounded-full bg-red-600" />
         <div className="w-2.5 h-2.5 rounded-full bg-violet-500" />
       </div>
       <span className="text-sm text-zinc-500">Loading your library...</span>
@@ -499,8 +496,8 @@ function ProductCard({ product, downloads, installedVersion, onDownload, onOpenF
       <div className="p-5">
         {/* Product header */}
         <div className="flex items-start gap-4">
-          <div ref={iconRef} className={`w-12 h-12 rounded-xl bg-gradient-to-br ${isSample ? 'from-violet-500/20 to-blue-500/10 border-violet-500/20' : 'from-orange-500/20 to-fuchsia-500/10 border-orange-500/20'} border flex items-center justify-center flex-shrink-0`}>
-            {isSample ? <Music className="w-5 h-5 text-violet-400" /> : <Package className="w-5 h-5 text-orange-400" />}
+          <div ref={iconRef} className={`w-12 h-12 rounded-xl bg-gradient-to-br ${isSample ? 'from-violet-500/20 to-blue-500/10 border-violet-500/20' : 'from-red-600/20 to-red-500/10 border-red-600/20'} border flex items-center justify-center flex-shrink-0`}>
+            {isSample ? <Music className="w-5 h-5 text-violet-400" /> : <Package className="w-5 h-5 text-red-400" />}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex flex-wrap items-center gap-2 mb-0.5">
@@ -509,13 +506,13 @@ function ProductCard({ product, downloads, installedVersion, onDownload, onOpenF
                 <span className="text-[10px] font-medium border rounded-full px-2 py-0.5 text-violet-400 bg-violet-500/10 border-violet-500/20">Sample Pack</span>
               ) : (
                 (product.formats?.length ? product.formats : ['VST3']).map((fmt) => (
-                  <span key={fmt} className="text-[10px] font-medium border rounded-full px-2 py-0.5 text-fuchsia-400 bg-fuchsia-500/10 border-fuchsia-500/20">{fmt}</span>
+                  <span key={fmt} className="text-[10px] font-medium border rounded-full px-2 py-0.5 text-red-400 bg-red-500/10 border-red-500/20">{fmt}</span>
                 ))
               )}
             </div>
             <div className="text-[11px] text-zinc-600 font-mono mb-1">
               {hasUpdate ? (
-                <><span className="text-zinc-500">v{installedVersion}</span> <span className="text-orange-400">&rarr; v{product.version}</span></>
+                <><span className="text-zinc-500">v{installedVersion}</span> <span className="text-red-400">&rarr; v{product.version}</span></>
               ) : (
                 <>v{product.version}</>
               )}
@@ -539,11 +536,11 @@ function ProductCard({ product, downloads, installedVersion, onDownload, onOpenF
             {inProgress ? (
               <div className="flex items-center gap-3 flex-1">
                 <div className="flex-1 h-2 bg-white/[0.06] rounded-full overflow-hidden">
-                  <div className="h-full bg-gradient-to-r from-orange-500 to-fuchsia-500 rounded-full transition-all duration-200" style={{ width: `${dlState?.percent ?? 0}%` }} />
+                  <div className="h-full bg-gradient-to-r from-red-700 to-red-500 rounded-full transition-all duration-200" style={{ width: `${dlState?.percent ?? 0}%` }} />
                 </div>
                 <span className="text-xs text-zinc-400 font-mono w-8 text-right">{dlState?.percent ?? 0}%</span>
-                <span className="text-xs text-orange-400">{status === 'installing' ? 'Installing...' : 'Downloading...'}</span>
-                <Loader2 className="w-4 h-4 text-orange-400 animate-spin flex-shrink-0" />
+                <span className="text-xs text-red-400">{status === 'installing' ? 'Installing...' : 'Downloading...'}</span>
+                <Loader2 className="w-4 h-4 text-red-400 animate-spin flex-shrink-0" />
               </div>
             ) : showInstalled ? (
               <div ref={installedRef} className="flex items-center gap-3 flex-1">
@@ -561,8 +558,8 @@ function ProductCard({ product, downloads, installedVersion, onDownload, onOpenF
             ) : hasUpdate ? (
               <>
                 <div className="flex items-center gap-2 flex-1">
-                  <ArrowUpCircle className="w-4 h-4 text-orange-400" />
-                  <span className="text-xs text-orange-400 font-medium">Update available</span>
+                  <ArrowUpCircle className="w-4 h-4 text-red-400" />
+                  <span className="text-xs text-red-400 font-medium">Update available</span>
                 </div>
                 <button onClick={onUninstall} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/[0.04] hover:bg-red-500/10 border border-white/[0.06] hover:border-red-500/20 text-xs text-zinc-400 hover:text-red-400 transition-all">
                   <Trash2 className="w-3.5 h-3.5" />Uninstall
@@ -570,12 +567,12 @@ function ProductCard({ product, downloads, installedVersion, onDownload, onOpenF
                 <button onClick={onOpenFolder} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-xs text-zinc-400 hover:text-white transition-all">
                   <FolderOpen className="w-3.5 h-3.5" />Open Folder
                 </button>
-                <button onClick={() => onDownload(currentPlatform, platformUrl)} className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-orange-500 to-fuchsia-600 hover:from-orange-400 hover:to-fuchsia-500 text-white text-sm font-medium rounded-lg transition-all shadow-md shadow-orange-500/20">
+                <button onClick={() => onDownload(currentPlatform, platformUrl)} className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-red-700 to-red-500 hover:from-red-500 text-white text-sm font-medium rounded-lg transition-all shadow-md shadow-red-600/15">
                   <ArrowUpCircle className="w-4 h-4" />Update
                 </button>
               </>
             ) : (
-              <button onClick={() => onDownload(currentPlatform, platformUrl)} className="flex items-center gap-2 px-4 py-2 ml-auto bg-gradient-to-r from-orange-500 to-fuchsia-600 hover:from-orange-400 hover:to-fuchsia-500 text-white text-sm font-medium rounded-lg transition-all shadow-md shadow-orange-500/20">
+              <button onClick={() => onDownload(currentPlatform, platformUrl)} className="flex items-center gap-2 px-4 py-2 ml-auto bg-gradient-to-r from-red-700 to-red-500 hover:from-red-500 text-white text-sm font-medium rounded-lg transition-all shadow-md shadow-red-600/15">
                 <Download className="w-4 h-4" />{status === 'error' ? 'Retry' : isSample ? 'Download' : `Install for ${platformLabels[currentPlatform]}`}
               </button>
             )}
@@ -625,13 +622,13 @@ function EmptyState() {
 
   return (
     <div ref={ref} className="flex flex-col items-center justify-center py-20 text-center opacity-0">
-      <div ref={iconRef} className="w-16 h-16 rounded-2xl bg-gradient-to-br from-orange-500/10 to-fuchsia-500/10 border border-orange-500/20 flex items-center justify-center mb-5">
-        <Package className="w-7 h-7 text-orange-400/60" />
+      <div ref={iconRef} className="w-16 h-16 rounded-2xl bg-gradient-to-br from-red-600/10 to-red-500/10 border border-red-600/20 flex items-center justify-center mb-5">
+        <Package className="w-7 h-7 text-red-400/60" />
       </div>
       <h3 className="text-base font-semibold text-white mb-2">No purchases yet</h3>
       <p className="text-sm text-zinc-500 max-w-xs leading-relaxed">
         Your purchased VST plugins and sample packs will appear here.{' '}
-        <a href="https://hardwavestudios.com" target="_blank" rel="noreferrer" className="text-orange-400 hover:text-orange-300 transition-colors">
+        <a href="https://hardwavestudios.com" target="_blank" rel="noreferrer" className="text-red-400 hover:text-red-300 transition-colors">
           Browse the store
         </a>
       </p>

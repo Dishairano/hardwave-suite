@@ -144,7 +144,7 @@ function PathSetting({ label, path, defaultPath, isDefault, onBrowse, onReset }:
         {!isDefault && (
           <button
             onClick={onReset}
-            className="flex items-center gap-1 text-[11px] text-zinc-500 hover:text-orange-400 transition-colors"
+            className="flex items-center gap-1 text-[11px] text-zinc-500 hover:text-red-400 transition-colors"
             title={`Reset to ${defaultPath}`}
           >
             <RotateCcw className="w-3 h-3" />

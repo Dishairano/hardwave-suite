@@ -31,17 +31,17 @@ export function UpdateModal({
       {/* Modal */}
       <div className="relative w-full max-w-md mx-4 bg-[#111118] border border-white/[0.08] rounded-2xl shadow-2xl overflow-hidden">
         {/* Gradient accent line */}
-        <div className="h-0.5 bg-gradient-to-r from-orange-500 via-fuchsia-500 to-orange-500" />
+        <div className="h-0.5 bg-gradient-to-r from-red-700 via-red-500 to-red-700" />
 
         {/* Header */}
         <div className="flex items-start gap-4 p-5 pb-0">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500/20 to-fuchsia-500/20 border border-orange-500/20 flex items-center justify-center flex-shrink-0">
-            <Sparkles className="w-5 h-5 text-orange-400" />
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-red-600/20 to-red-500/10 border border-red-600/20 flex items-center justify-center flex-shrink-0">
+            <Sparkles className="w-5 h-5 text-red-400" />
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-base font-semibold text-white">Update Available</h2>
             <p className="text-sm text-zinc-400 mt-0.5">
-              Hardwave Suite <span className="text-orange-400 font-mono font-medium">v{version}</span>
+              Hardwave Suite <span className="text-red-400 font-mono font-medium">v{version}</span>
             </p>
           </div>
           {!downloading && (
@@ -70,7 +70,7 @@ export function UpdateModal({
               href={`https://hardwavestudios.com/changelog#v${version}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 mt-3 text-xs text-orange-400 hover:text-orange-300 transition-colors"
+              className="inline-flex items-center gap-1 mt-3 text-xs text-red-400 hover:text-red-300 transition-colors"
             >
               View full changelog
               <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -88,7 +88,7 @@ export function UpdateModal({
             <div className="flex items-center gap-3">
               <div className="flex-1 h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-orange-500 to-fuchsia-500 rounded-full transition-all duration-300"
+                  className="h-full bg-gradient-to-r from-red-700 to-red-500 rounded-full transition-all duration-300"
                   style={{ width: `${Math.max(5, progress)}%` }}
                 />
               </div>
@@ -117,7 +117,7 @@ export function UpdateModal({
               </button>
               <button
                 onClick={onUpdate}
-                className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-orange-500 to-fuchsia-600 hover:from-orange-400 hover:to-fuchsia-500 text-sm font-semibold text-white transition-all shadow-lg shadow-orange-500/15 flex items-center justify-center gap-2"
+                className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-red-700 to-red-500 hover:from-red-500 text-sm font-semibold text-white transition-all shadow-lg shadow-red-600/15 flex items-center justify-center gap-2"
               >
                 <Download className="w-4 h-4" />
                 Update now
@@ -126,7 +126,7 @@ export function UpdateModal({
           )}
           {downloading && (
             <div className="flex-1 py-2.5 rounded-xl bg-white/[0.04] border border-white/[0.06] text-sm text-zinc-400 flex items-center justify-center gap-2">
-              <Loader2 className="w-4 h-4 animate-spin text-orange-400" />
+              <Loader2 className="w-4 h-4 animate-spin text-red-400" />
               Downloading update...
             </div>
           )}

@@ -12,23 +12,23 @@ const steps = [
     title: 'Welcome to Hardwave Suite',
     description:
       'Your central hub for Hardwave Studios audio plugins. Download, install, and manage all your purchased VST3 and CLAP plugins from one place.',
-    accent: 'from-orange-500 to-fuchsia-600',
-    glowColor: 'rgba(249, 115, 22, 0.08)',
+    accent: 'from-red-700 to-red-500',
+    glowColor: 'rgba(220, 38, 38, 0.08)',
   },
   {
     icon: Download,
     title: 'One-Click Installs',
     description:
       'Browse your library and install plugins with a single click. Hardwave Suite automatically detects your OS and installs to the correct plugin directories.',
-    accent: 'from-fuchsia-500 to-violet-600',
-    glowColor: 'rgba(217, 70, 239, 0.08)',
+    accent: 'from-red-700 to-red-500',
+    glowColor: 'rgba(220, 38, 38, 0.06)',
   },
   {
     icon: RefreshCw,
     title: 'Automatic Updates',
     description:
       'Stay up to date effortlessly. When a new version of a plugin is available, you\'ll see an update button right in your library. The Suite itself also auto-updates.',
-    accent: 'from-violet-500 to-blue-600',
+    accent: 'from-red-700 to-red-600',
     glowColor: 'rgba(139, 92, 246, 0.08)',
   },
   {
@@ -36,7 +36,7 @@ const steps = [
     title: 'You\'re All Set',
     description:
       'Your purchases are tied to your Hardwave Studios account — sign in on any machine to access your full library. Let\'s get started.',
-    accent: 'from-blue-500 to-orange-500',
+    accent: 'from-red-700 to-red-500',
     glowColor: 'rgba(59, 130, 246, 0.08)',
   },
 ]
@@ -289,7 +289,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
               onClick={() => !transitioning && goToStep(i)}
               className={`h-1.5 rounded-full transition-all duration-500 ${
                 i === step
-                  ? 'w-8 bg-gradient-to-r from-orange-500 to-fuchsia-500'
+                  ? 'w-8 bg-gradient-to-r from-red-700 to-red-500'
                   : i < step
                     ? 'w-1.5 bg-white/[0.3]'
                     : 'w-1.5 bg-white/[0.1] hover:bg-white/[0.2]'
@@ -313,7 +313,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
           <button
             onClick={() => (isLast ? handleComplete() : goToStep(step + 1))}
             disabled={transitioning}
-            className={`flex-1 py-3 bg-gradient-to-r ${current.accent} hover:opacity-90 disabled:opacity-50 text-white font-semibold text-sm rounded-xl transition-all shadow-lg shadow-orange-500/20 flex items-center justify-center gap-2`}
+            className={`flex-1 py-3 bg-gradient-to-r ${current.accent} hover:opacity-90 disabled:opacity-50 text-white font-semibold text-sm rounded-xl transition-all shadow-lg shadow-red-600/15 flex items-center justify-center gap-2`}
           >
             {isLast ? 'Get Started' : 'Next'}
             {!isLast && <ChevronRight className="w-4 h-4" />}

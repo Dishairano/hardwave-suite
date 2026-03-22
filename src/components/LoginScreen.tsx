@@ -146,8 +146,8 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
     <div ref={containerRef} className="flex items-center justify-center h-screen bg-[#08080c] relative overflow-hidden">
       {/* Background glow effects */}
       <div className="absolute inset-0 pointer-events-none">
-        <div ref={glow1Ref} className="absolute top-1/4 left-1/3 w-[500px] h-[500px] bg-orange-500/[0.04] rounded-full blur-[120px] opacity-0" />
-        <div ref={glow2Ref} className="absolute bottom-1/4 right-1/3 w-[400px] h-[400px] bg-fuchsia-500/[0.04] rounded-full blur-[120px] opacity-0" />
+        <div ref={glow1Ref} className="absolute top-1/4 left-1/3 w-[500px] h-[500px] bg-red-600/[0.04] rounded-full blur-[120px] opacity-0" />
+        <div ref={glow2Ref} className="absolute bottom-1/4 right-1/3 w-[400px] h-[400px] bg-red-500/[0.04] rounded-full blur-[120px] opacity-0" />
       </div>
 
       <div className="relative w-full max-w-sm mx-4">
@@ -167,7 +167,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             placeholder="Email"
             required
             autoFocus
-            className="w-full px-4 py-3 bg-white/[0.04] border border-white/[0.08] rounded-xl text-white placeholder-zinc-600 text-sm focus:outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/25 transition-all backdrop-blur-sm opacity-0"
+            className="w-full px-4 py-3 bg-white/[0.04] border border-white/[0.08] rounded-xl text-white placeholder-zinc-600 text-sm focus:outline-none focus:border-red-600/50 focus:ring-1 focus:ring-red-600/25 transition-all backdrop-blur-sm opacity-0"
           />
           <input
             type="password"
@@ -175,7 +175,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Password"
             required
-            className="w-full px-4 py-3 bg-white/[0.04] border border-white/[0.08] rounded-xl text-white placeholder-zinc-600 text-sm focus:outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/25 transition-all backdrop-blur-sm opacity-0"
+            className="w-full px-4 py-3 bg-white/[0.04] border border-white/[0.08] rounded-xl text-white placeholder-zinc-600 text-sm focus:outline-none focus:border-red-600/50 focus:ring-1 focus:ring-red-600/25 transition-all backdrop-blur-sm opacity-0"
           />
 
           <label className="flex items-center gap-2 cursor-pointer select-none py-1 opacity-0">
@@ -185,7 +185,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
               onChange={(e) => setRememberMe(e.target.checked)}
               className="sr-only peer"
             />
-            <div className="w-4 h-4 rounded border border-white/[0.15] bg-white/[0.04] peer-checked:bg-orange-500 peer-checked:border-orange-500 flex items-center justify-center transition-all">
+            <div className="w-4 h-4 rounded border border-white/[0.15] bg-white/[0.04] peer-checked:bg-red-600 peer-checked:border-red-600 flex items-center justify-center transition-all">
               {rememberMe && (
                 <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M2 6l3 3 5-5" />
@@ -204,7 +204,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3 bg-gradient-to-r from-orange-500 to-fuchsia-600 hover:from-orange-400 hover:to-fuchsia-500 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold text-sm rounded-xl transition-all shadow-lg shadow-orange-500/20 flex items-center justify-center gap-2 opacity-0"
+            className="w-full py-3 bg-gradient-to-r from-red-700 to-red-500 hover:from-red-600 hover:to-red-400 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold text-sm rounded-xl transition-all shadow-lg shadow-red-600/15 flex items-center justify-center gap-2 opacity-0"
           >
             {loading ? <><Loader2 className="w-4 h-4 animate-spin" />Signing in...</> : 'Sign In'}
           </button>
@@ -212,7 +212,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
 
         <p ref={footerRef} className="text-center text-xs text-zinc-600 mt-6 opacity-0">
           Need an account?{' '}
-          <a href="https://hardwavestudios.com" target="_blank" rel="noreferrer" className="text-orange-400 hover:text-orange-300 transition-colors">
+          <a href="https://hardwavestudios.com" target="_blank" rel="noreferrer" className="text-red-400 hover:text-red-300 transition-colors">
             hardwavestudios.com
           </a>
         </p>
