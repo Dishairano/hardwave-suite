@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useReducer, useCallback, useState, useRef } from 'react'
-import { Download, Package, FolderOpen, CheckCircle, Loader2, AlertCircle, LogOut, RefreshCw, ArrowUpCircle, Trash2, Settings, Music } from 'lucide-react'
+import { Download, Package, FolderOpen, CheckCircle, Loader2, AlertCircle, LogOut, RefreshCw, ArrowUpCircle, Trash2, Settings, Music, Bell, X } from 'lucide-react'
 import { SettingsPanel } from '../components/SettingsPanel'
 import { getVersion } from '@tauri-apps/api/app'
 import anime from 'animejs'
@@ -48,6 +48,37 @@ function detectPlatform(): 'windows' | 'mac' | 'linux' {
 }
 
 const platformLabels: Record<string, string> = { windows: 'Windows', mac: 'macOS', linux: 'Linux' }
+
+
+function LoudLabUpdateBanner({ products }: { products: Product[] }) {
+  const [dismissed, setDismissed] = useState(() => {
+    try { return localStorage.getItem('hw_banner') === 'loudlab_0.5.1' } catch { return false }
+  })
+  if (dismissed) return null
+  const p = products.find((p) => p.slug === 'loudlab' || p.slug === 'hardwave-loudlab')
+  if (!p) return null
+  const dismiss = () => {
+    try { localStorage.setItem('hw_banner', 'loudlab_0.5.1') } catch {}
+    setDismissed(true)
+  }
+  return (
+    <div className="flex items-start gap-3 px-4 py-3 mb-6 rounded-2xl bg-orange-500/[0.06] border border-orange-500/20 backdrop-blur-sm">
+      <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500/20 to-fuchsia-500/10 border border-orange-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+        <Bell className="w-4 h-4 text-orange-400" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-0.5">
+          <span className="text-sm font-semibold text-white">LoudLab v0.5.1 available</span>
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-orange-500/15 text-orange-400 border border-orange-500/20">New</span>
+        </div>
+        <p className="text-xs text-zinc-500">EQ curve improvements, fixed button clicks, and double-click knob editing.</p>
+      </div>
+      <button onClick={dismiss} className="text-zinc-600 hover:text-zinc-400 transition-colors mt-0.5 shrink-0" aria-label="Dismiss">
+        <X className="w-4 h-4" />
+      </button>
+    </div>
+  )
+}
 
 export function HubView({ user, onLogout, preloadedProducts, preloadedVersions }: HubViewProps) {
   const hasPreloaded = !!(preloadedProducts && preloadedProducts.length >= 0)
@@ -251,6 +282,8 @@ export function HubView({ user, onLogout, preloadedProducts, preloadedVersions }
             </h1>
             <p className="text-sm text-zinc-500 mt-1">Your products are ready to download and install.</p>
           </div>
+
+          <LoudLabUpdateBanner products={products} />
 
           {loading ? (
             <LoadingState />
