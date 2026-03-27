@@ -143,10 +143,16 @@ export async function onDownloadProgress(
   return listen<DownloadProgress>('dl:progress', (e) => callback(e.payload))
 }
 
+// Shared auth cookie on .hardwavestudios.com — all webviews + Suite share one session
+const HW_COOKIE = 'hw_auth'
+function setHwCookie(t: string) { document.cookie = `${HW_COOKIE}=${encodeURIComponent(t)}; domain=.hardwavestudios.com; path=/; max-age=${7*86400}; secure; samesite=lax` }
+function clearHwCookie() { document.cookie = `${HW_COOKIE}=; domain=.hardwavestudios.com; path=/; max-age=0; secure; samesite=lax` }
+
 // Session helpers (persist token across restarts)
 export function saveSession(token: string, user: User) {
   localStorage.setItem('hw_token', token)
   localStorage.setItem('hw_user', JSON.stringify(user))
+  setHwCookie(token)
 }
 
 export function loadSession(): { token: string; user: User } | null {
@@ -163,4 +169,5 @@ export function loadSession(): { token: string; user: User } | null {
 export function clearSession() {
   localStorage.removeItem('hw_token')
   localStorage.removeItem('hw_user')
+  clearHwCookie()
 }
