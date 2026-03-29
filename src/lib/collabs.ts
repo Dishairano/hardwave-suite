@@ -1,5 +1,3 @@
-import type { User } from './api'
-
 // ── Types ──
 
 export interface ParticipantInfo {

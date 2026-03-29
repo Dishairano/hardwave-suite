@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Users, Plus, LogIn, Copy, Check, X, Loader2 } from 'lucide-react'
 import { CollabChat } from '../components/CollabChat'
 import { CollabStatus } from '../components/CollabStatus'
