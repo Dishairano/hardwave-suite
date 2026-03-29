@@ -3,7 +3,9 @@ import { LoginScreen } from './components/LoginScreen'
 import { SplashScreen } from './components/SplashScreen'
 import { Onboarding } from './components/Onboarding'
 import { HubView } from './views/HubView'
+import { CollabsView } from './views/CollabsView'
 import { UpdateModal } from './components/UpdateModal'
+import { Package, Users } from 'lucide-react'
 import * as api from './lib/api'
 import type { Product } from './lib/api'
 
@@ -26,6 +28,7 @@ export default function App() {
   const [dataReady, setDataReady] = useState(false)
   const [preloadedProducts, setPreloadedProducts] = useState<Product[] | null>(null)
   const [preloadedVersions, setPreloadedVersions] = useState<Record<string, string> | null>(null)
+  const [activeTab, setActiveTab] = useState<'hub' | 'collabs'>('hub')
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo>({
     version: '',
     changelog: '',
@@ -178,7 +181,46 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">
-      <HubView user={user} onLogout={handleLogout} preloadedProducts={preloadedProducts} preloadedVersions={preloadedVersions} />
+      {/* Tab navigation */}
+      <div className="flex items-center gap-0 bg-[#08080c] border-b border-white/[0.06] px-4 flex-shrink-0" data-tauri-drag-region>
+        <button
+          onClick={() => setActiveTab('hub')}
+          className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium transition-all relative ${
+            activeTab === 'hub'
+              ? 'text-white'
+              : 'text-zinc-500 hover:text-zinc-300'
+          }`}
+        >
+          <Package size={13} />
+          Hub
+          {activeTab === 'hub' && (
+            <div className="absolute bottom-0 left-2 right-2 h-[2px] bg-red-500 rounded-full" />
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab('collabs')}
+          className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium transition-all relative ${
+            activeTab === 'collabs'
+              ? 'text-white'
+              : 'text-zinc-500 hover:text-zinc-300'
+          }`}
+        >
+          <Users size={13} />
+          Collabs
+          {activeTab === 'collabs' && (
+            <div className="absolute bottom-0 left-2 right-2 h-[2px] bg-red-500 rounded-full" />
+          )}
+        </button>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-hidden flex flex-col">
+        {activeTab === 'hub' ? (
+          <HubView user={user} onLogout={handleLogout} preloadedProducts={preloadedProducts} preloadedVersions={preloadedVersions} />
+        ) : (
+          <CollabsView user={user} />
+        )}
+      </div>
 
       {updateInfo.available && !updateInfo.dismissed && (
         <UpdateModal

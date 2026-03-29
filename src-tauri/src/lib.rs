@@ -1,14 +1,16 @@
 mod api;
+mod collabs;
 mod models;
 
 use models::DownloadProgress;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{Emitter, State};
 use futures_util::StreamExt;
 use tokio::io::AsyncWriteExt;
 
 pub struct AppState {
     pub api_token: Mutex<Option<String>>,
+    pub collab: Arc<collabs::CollabState>,
 }
 
 /// Base data directory for Hardwave Suite config/data.
@@ -722,6 +724,57 @@ async fn pick_folder(app: tauri::AppHandle, title: String) -> Result<Option<Stri
     rx.await.map_err(|e| format!("Dialog error: {}", e))
 }
 
+// ── Collab Commands ──
+
+#[tauri::command]
+async fn collab_create(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let token = state.api_token.lock().unwrap().clone()
+        .ok_or("Not authenticated")?;
+    let collab = state.collab.clone();
+
+    // Connect first if not already connected
+    if !collab.is_connected().await {
+        collabs::connect(&token, app, collab.clone()).await?;
+    }
+    collabs::create_room(&collab).await
+}
+
+#[tauri::command]
+async fn collab_join(
+    code: String,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let token = state.api_token.lock().unwrap().clone()
+        .ok_or("Not authenticated")?;
+    let collab = state.collab.clone();
+
+    if !collab.is_connected().await {
+        collabs::connect(&token, app, collab.clone()).await?;
+    }
+    collabs::join_room(&collab, &code).await
+}
+
+#[tauri::command]
+async fn collab_leave(state: State<'_, AppState>) -> Result<(), String> {
+    let collab = state.collab.clone();
+    collabs::disconnect(collab).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn collab_send_chat(text: String, state: State<'_, AppState>) -> Result<(), String> {
+    collabs::send_chat(&state.collab, &text).await
+}
+
+#[tauri::command]
+async fn collab_send_presence(active_window: String, state: State<'_, AppState>) -> Result<(), String> {
+    collabs::send_presence(&state.collab, &active_window).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -738,6 +791,7 @@ pub fn run() {
         })
         .manage(AppState {
             api_token: Mutex::new(None),
+            collab: Arc::new(collabs::CollabState::new()),
         })
         .invoke_handler(tauri::generate_handler![
             login,
@@ -752,6 +806,11 @@ pub fn run() {
             get_install_paths,
             set_install_path,
             pick_folder,
+            collab_create,
+            collab_join,
+            collab_leave,
+            collab_send_chat,
+            collab_send_presence,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
