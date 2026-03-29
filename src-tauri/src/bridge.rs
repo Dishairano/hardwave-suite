@@ -14,6 +14,7 @@ struct FlStatePost {
     state: serde_json::Value,
     ops: Vec<serde_json::Value>,
     active_window: Option<String>,
+    cursor: Option<serde_json::Value>,
 }
 
 /// Bridge state: holds the last FL state, pending remote commands, and relay sender.
@@ -126,13 +127,13 @@ pub async fn start_bridge(
                                 }
                             }
 
-                            // Forward presence
+                            // Forward presence with cursor
                             if let Some(window) = &post.active_window {
                                 if collab.is_connected().await {
                                     let msg = serde_json::json!({
                                         "type": "presence",
                                         "active_window": window,
-                                        "cursor": null,
+                                        "cursor": post.cursor,
                                     });
                                     if let Some(tx) = &*collab.tx_ref().await {
                                         let _ = tx.send(msg.to_string());

@@ -18,10 +18,18 @@ export interface ChatMessage {
   timestamp: number
 }
 
+export interface CursorInfo {
+  screen_x: number
+  screen_y: number
+  client_x: number
+  client_y: number
+  window: string
+}
+
 export interface PresenceUpdate {
   from: string
   active_window: string
-  cursor: unknown
+  cursor: CursorInfo | null
 }
 
 export interface StateDelta {
