@@ -20,6 +20,8 @@ struct FlStatePost {
 /// Bridge state: holds the last FL state, pending remote commands, and relay sender.
 pub struct BridgeState {
     last_state: Mutex<Option<serde_json::Value>>,
+    last_post_time: Mutex<Option<std::time::Instant>>,
+    ops_count: Mutex<u64>,
     pending_commands: Mutex<Vec<serde_json::Value>>,
     bridge_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -28,6 +30,8 @@ impl BridgeState {
     pub fn new() -> Self {
         Self {
             last_state: Mutex::new(None),
+            last_post_time: Mutex::new(None),
+            ops_count: Mutex::new(0),
             pending_commands: Mutex::new(Vec::new()),
             bridge_task: Mutex::new(None),
         }
@@ -42,6 +46,31 @@ impl BridgeState {
     pub async fn drain_commands(&self) -> Vec<serde_json::Value> {
         let mut cmds = self.pending_commands.lock().await;
         std::mem::take(&mut *cmds)
+    }
+
+    /// Check if FL Studio is actively posting (last post within 2 seconds).
+    pub async fn is_fl_connected(&self) -> bool {
+        if let Some(t) = *self.last_post_time.lock().await {
+            t.elapsed().as_secs() < 2
+        } else {
+            false
+        }
+    }
+
+    /// Get the last FL state snapshot.
+    pub async fn get_last_state(&self) -> Option<serde_json::Value> {
+        self.last_state.lock().await.clone()
+    }
+
+    /// Get total ops synced.
+    pub async fn get_ops_count(&self) -> u64 {
+        *self.ops_count.lock().await
+    }
+
+    /// Record that FL posted state.
+    async fn record_post(&self, ops_count: usize) {
+        *self.last_post_time.lock().await = Some(std::time::Instant::now());
+        *self.ops_count.lock().await += ops_count as u64;
     }
 }
 
@@ -111,8 +140,9 @@ pub async fn start_bridge(
                         };
 
                         if let Ok(post) = serde_json::from_str::<FlStatePost>(body) {
-                            // Store the latest state
+                            // Store the latest state and record activity
                             *bridge.last_state.lock().await = Some(post.state.clone());
+                            bridge.record_post(post.ops.len()).await;
 
                             // Forward ops to relay as state_delta if we have any
                             if !post.ops.is_empty() && collab.is_connected().await {

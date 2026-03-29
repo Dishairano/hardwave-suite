@@ -70,6 +70,21 @@ export async function installFlScript(): Promise<string> {
   return invoke('install_fl_script')
 }
 
+export interface BridgeStatus {
+  fl_connected: boolean
+  ops_synced: number
+  transport: {
+    playing: boolean
+    recording: boolean
+    bpm: number
+    position: number
+  } | null
+}
+
+export async function getBridgeStatus(): Promise<BridgeStatus> {
+  return invoke('bridge_status')
+}
+
 // ── Collab Commands ──
 
 export async function createSession(): Promise<void> {

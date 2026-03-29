@@ -864,6 +864,25 @@ async fn collab_send_presence(active_window: String, state: State<'_, AppState>)
     collabs::send_presence(&state.collab, &active_window).await
 }
 
+#[tauri::command]
+async fn bridge_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let br = &state.bridge;
+    let fl_connected = br.is_fl_connected().await;
+    let ops_count = br.get_ops_count().await;
+    let fl_state = br.get_last_state().await;
+
+    // Extract transport info from FL state if available
+    let transport = fl_state
+        .as_ref()
+        .and_then(|s| s.get("transport").cloned());
+
+    Ok(serde_json::json!({
+        "fl_connected": fl_connected,
+        "ops_synced": ops_count,
+        "transport": transport,
+    }))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -903,6 +922,7 @@ pub fn run() {
             collab_send_presence,
             fl_script_status,
             install_fl_script,
+            bridge_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
