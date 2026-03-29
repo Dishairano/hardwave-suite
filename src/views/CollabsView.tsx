@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Users, Plus, LogIn, Copy, Check, X, Loader2 } from 'lucide-react'
+import { Users, Plus, LogIn, Copy, Check, X, Loader2, Download, CheckCircle2 } from 'lucide-react'
 import { CollabChat } from '../components/CollabChat'
 import { CollabStatus } from '../components/CollabStatus'
 import * as collabs from '../lib/collabs'
@@ -22,7 +22,29 @@ export function CollabsView({ user }: CollabsViewProps) {
   const [messages, setMessages] = useState<collabs.ChatMessage[]>([])
   const [presence, setPresence] = useState<Record<string, collabs.PresenceUpdate>>({})
   const [error, setError] = useState<string | null>(null)
+  const [flScriptInstalled, setFlScriptInstalled] = useState<boolean | null>(null)
+  const [flFound, setFlFound] = useState(false)
+  const [installing, setInstalling] = useState(false)
   const unlistenRef = useRef<(() => void) | null>(null)
+
+  // Check FL Script status on mount
+  useEffect(() => {
+    collabs.getFlScriptStatus().then((status) => {
+      setFlFound(status.fl_found as boolean)
+      setFlScriptInstalled(status.installed as boolean)
+    }).catch(() => {})
+  }, [])
+
+  const handleInstallScript = async () => {
+    setInstalling(true)
+    try {
+      await collabs.installFlScript()
+      setFlScriptInstalled(true)
+    } catch (e) {
+      setError(String(e))
+    }
+    setInstalling(false)
+  }
 
   // Set up event listener
   useEffect(() => {
@@ -168,6 +190,50 @@ export function CollabsView({ user }: CollabsViewProps) {
               Collaborate on FL Studio projects in real-time
             </p>
           </div>
+
+          {/* FL Script Status */}
+          {flScriptInstalled !== null && (
+            <div className="px-4 py-3 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {flScriptInstalled ? (
+                    <>
+                      <CheckCircle2 size={16} className="text-emerald-500" />
+                      <div>
+                        <div className="text-xs font-medium text-white">FL Studio Script Installed</div>
+                        <div className="text-[10px] text-zinc-500">Restart FL Studio to activate</div>
+                      </div>
+                    </>
+                  ) : flFound ? (
+                    <>
+                      <Download size={16} className="text-yellow-500" />
+                      <div>
+                        <div className="text-xs font-medium text-white">FL Studio Detected</div>
+                        <div className="text-[10px] text-zinc-500">Install the collab script to enable sync</div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <X size={16} className="text-zinc-500" />
+                      <div>
+                        <div className="text-xs font-medium text-zinc-400">FL Studio Not Found</div>
+                        <div className="text-[10px] text-zinc-600">Install FL Studio to use Collabs</div>
+                      </div>
+                    </>
+                  )}
+                </div>
+                {flFound && !flScriptInstalled && (
+                  <button
+                    onClick={handleInstallScript}
+                    disabled={installing}
+                    className="px-3 py-1.5 rounded-lg bg-red-600/20 border border-red-600/30 text-xs text-red-400 hover:bg-red-600/30 transition-all disabled:opacity-50"
+                  >
+                    {installing ? 'Installing...' : 'Install'}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Create Session */}
           <button

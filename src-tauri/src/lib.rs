@@ -726,6 +726,86 @@ async fn pick_folder(app: tauri::AppHandle, title: String) -> Result<Option<Stri
     rx.await.map_err(|e| format!("Dialog error: {}", e))
 }
 
+// ── FL Script Installation ──
+
+/// Detect FL Studio's MIDI script hardware folder.
+/// Checks Documents\Image-Line\FL Studio\Settings\Hardware\ first,
+/// then falls back to common Program Files paths.
+fn fl_script_dir() -> Option<std::path::PathBuf> {
+    // User Documents path (most reliable)
+    if let Some(docs) = dirs::document_dir() {
+        let hw_dir = docs
+            .join("Image-Line")
+            .join("FL Studio")
+            .join("Settings")
+            .join("Hardware");
+        if hw_dir.exists() {
+            return Some(hw_dir.join("Hardwave Collab"));
+        }
+    }
+
+    // Check common FL Studio install paths
+    #[cfg(target_os = "windows")]
+    {
+        let program_files = std::path::PathBuf::from(r"C:\Program Files\Image-Line");
+        if program_files.exists() {
+            // Find the FL Studio folder (could be "FL Studio 2024", "FL Studio 21", etc.)
+            if let Ok(entries) = std::fs::read_dir(&program_files) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with("FL Studio") {
+                        let hw_dir = entry.path().join("Settings").join("Hardware");
+                        if hw_dir.exists() {
+                            return Some(hw_dir.join("Hardwave Collab"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+#[tauri::command]
+fn fl_script_status() -> std::collections::HashMap<String, serde_json::Value> {
+    let mut result = std::collections::HashMap::new();
+
+    match fl_script_dir() {
+        Some(dir) => {
+            let parent = dir.parent().unwrap_or(&dir);
+            result.insert("fl_found".into(), serde_json::Value::Bool(parent.exists()));
+            result.insert("hardware_dir".into(), serde_json::json!(parent.to_string_lossy()));
+            let script_file = dir.join("device_Hardwave Collab.py");
+            result.insert("installed".into(), serde_json::Value::Bool(script_file.exists()));
+            result.insert("install_path".into(), serde_json::json!(dir.to_string_lossy()));
+        }
+        None => {
+            result.insert("fl_found".into(), serde_json::Value::Bool(false));
+            result.insert("installed".into(), serde_json::Value::Bool(false));
+        }
+    }
+
+    result
+}
+
+#[tauri::command]
+fn install_fl_script() -> Result<String, String> {
+    let dir = fl_script_dir()
+        .ok_or("FL Studio not found. Install FL Studio first, or manually copy the script.")?;
+
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create script directory: {}", e))?;
+
+    let script_content = include_str!("fl_script.py");
+    let script_path = dir.join("device_Hardwave Collab.py");
+
+    std::fs::write(&script_path, script_content)
+        .map_err(|e| format!("Failed to write script: {}", e))?;
+
+    Ok(dir.to_string_lossy().to_string())
+}
+
 // ── Collab Commands ──
 
 #[tauri::command]
@@ -821,6 +901,8 @@ pub fn run() {
             collab_leave,
             collab_send_chat,
             collab_send_presence,
+            fl_script_status,
+            install_fl_script,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -60,6 +60,16 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
   return tauriInvoke<T>(cmd, args)
 }
 
+// ── FL Script Commands ──
+
+export async function getFlScriptStatus(): Promise<Record<string, unknown>> {
+  return invoke('fl_script_status')
+}
+
+export async function installFlScript(): Promise<string> {
+  return invoke('install_fl_script')
+}
+
 // ── Collab Commands ──
 
 export async function createSession(): Promise<void> {
