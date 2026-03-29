@@ -1,4 +1,5 @@
 mod api;
+mod bridge;
 mod collabs;
 mod models;
 
@@ -11,6 +12,7 @@ use tokio::io::AsyncWriteExt;
 pub struct AppState {
     pub api_token: Mutex<Option<String>>,
     pub collab: Arc<collabs::CollabState>,
+    pub bridge: Arc<bridge::BridgeState>,
 }
 
 /// Base data directory for Hardwave Suite config/data.
@@ -734,10 +736,14 @@ async fn collab_create(
     let token = state.api_token.lock().unwrap().clone()
         .ok_or("Not authenticated")?;
     let collab = state.collab.clone();
+    let br = state.bridge.clone();
 
-    // Connect first if not already connected
+    // Start the bridge if not running
+    bridge::start_bridge(br.clone(), collab.clone()).await?;
+
+    // Connect to relay if not already connected
     if !collab.is_connected().await {
-        collabs::connect(&token, app, collab.clone()).await?;
+        collabs::connect(&token, app, collab.clone(), Some(br)).await?;
     }
     collabs::create_room(&collab).await
 }
@@ -751,9 +757,12 @@ async fn collab_join(
     let token = state.api_token.lock().unwrap().clone()
         .ok_or("Not authenticated")?;
     let collab = state.collab.clone();
+    let br = state.bridge.clone();
+
+    bridge::start_bridge(br.clone(), collab.clone()).await?;
 
     if !collab.is_connected().await {
-        collabs::connect(&token, app, collab.clone()).await?;
+        collabs::connect(&token, app, collab.clone(), Some(br)).await?;
     }
     collabs::join_room(&collab, &code).await
 }
@@ -792,6 +801,7 @@ pub fn run() {
         .manage(AppState {
             api_token: Mutex::new(None),
             collab: Arc::new(collabs::CollabState::new()),
+            bridge: Arc::new(bridge::BridgeState::new()),
         })
         .invoke_handler(tauri::generate_handler![
             login,

@@ -5,6 +5,8 @@ use tauri::Emitter;
 use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::tungstenite::Message;
 
+use crate::bridge::BridgeState;
+
 /// Relay server URL
 const RELAY_URL: &str = "wss://collab.hardwavestudios.com/ws";
 /// Fallback for development
@@ -56,6 +58,11 @@ impl CollabState {
     pub async fn is_connected(&self) -> bool {
         self.tx.lock().await.is_some()
     }
+
+    /// Get a reference to the send channel (for the bridge to forward FL state).
+    pub async fn tx_ref(&self) -> tokio::sync::MutexGuard<'_, Option<mpsc::UnboundedSender<String>>> {
+        self.tx.lock().await
+    }
 }
 
 /// Connect to the relay server and start the read/write loops.
@@ -64,6 +71,7 @@ pub async fn connect(
     token: &str,
     app: tauri::AppHandle,
     state: Arc<CollabState>,
+    bridge: Option<Arc<BridgeState>>,
 ) -> Result<(), String> {
     // Disconnect existing connection first
     disconnect(state.clone()).await;
@@ -102,10 +110,20 @@ pub async fn connect(
         });
 
         // Read loop: forward incoming WebSocket messages to Tauri events
+        // and route state_delta ops to the bridge for FL Script
         while let Some(msg_result) = read.next().await {
             match msg_result {
                 Ok(Message::Text(text)) => {
-                    if let Ok(event) = serde_json::from_str::<CollabEvent>(&text.to_string()) {
+                    let text_str = text.to_string();
+                    if let Ok(event) = serde_json::from_str::<CollabEvent>(&text_str) {
+                        // Route state_delta ops to bridge as FL commands
+                        if let CollabEvent::StateDelta { ref ops, .. } = event {
+                            if let Some(ref b) = bridge {
+                                for op in ops {
+                                    b.queue_command(op.clone()).await;
+                                }
+                            }
+                        }
                         let _ = app_read.emit("collab:event", event);
                     }
                 }
