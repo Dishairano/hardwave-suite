@@ -4,8 +4,9 @@ import { SplashScreen } from './components/SplashScreen'
 import { Onboarding } from './components/Onboarding'
 import { HubView } from './views/HubView'
 import { CollabsView } from './views/CollabsView'
+import { AutoMixView } from './views/AutoMixView'
 import { UpdateModal } from './components/UpdateModal'
-import { Package, Users } from 'lucide-react'
+import { Package, Users, Sliders } from 'lucide-react'
 import * as api from './lib/api'
 import type { Product } from './lib/api'
 
@@ -28,7 +29,7 @@ export default function App() {
   const [dataReady, setDataReady] = useState(false)
   const [preloadedProducts, setPreloadedProducts] = useState<Product[] | null>(null)
   const [preloadedVersions, setPreloadedVersions] = useState<Record<string, string> | null>(null)
-  const [activeTab, setActiveTab] = useState<'hub' | 'collabs'>('hub')
+  const [activeTab, setActiveTab] = useState<'hub' | 'collabs' | 'automix'>('hub')
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo>({
     version: '',
     changelog: '',
@@ -211,14 +212,30 @@ export default function App() {
             <div className="absolute bottom-0 left-2 right-2 h-[2px] bg-red-500 rounded-full" />
           )}
         </button>
+        <button
+          onClick={() => setActiveTab('automix')}
+          className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium transition-all relative ${
+            activeTab === 'automix'
+              ? 'text-white'
+              : 'text-zinc-500 hover:text-zinc-300'
+          }`}
+        >
+          <Sliders size={13} />
+          AutoMix
+          {activeTab === 'automix' && (
+            <div className="absolute bottom-0 left-2 right-2 h-[2px] bg-red-500 rounded-full" />
+          )}
+        </button>
       </div>
 
       {/* Content */}
       <div className="flex-1 overflow-hidden flex flex-col">
         {activeTab === 'hub' ? (
           <HubView user={user} onLogout={handleLogout} preloadedProducts={preloadedProducts} preloadedVersions={preloadedVersions} />
-        ) : (
+        ) : activeTab === 'collabs' ? (
           <CollabsView user={user} />
+        ) : (
+          <AutoMixView user={user} />
         )}
       </div>
 

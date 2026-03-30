@@ -1,4 +1,5 @@
 mod api;
+mod automix;
 mod bridge;
 mod collabs;
 mod models;
@@ -13,6 +14,7 @@ pub struct AppState {
     pub api_token: Mutex<Option<String>>,
     pub collab: Arc<collabs::CollabState>,
     pub bridge: Arc<bridge::BridgeState>,
+    pub automix: Arc<automix::AutoMixState>,
 }
 
 /// Base data directory for Hardwave Suite config/data.
@@ -901,6 +903,7 @@ pub fn run() {
             api_token: Mutex::new(None),
             collab: Arc::new(collabs::CollabState::new()),
             bridge: Arc::new(bridge::BridgeState::new()),
+            automix: Arc::new(automix::AutoMixState::new()),
         })
         .invoke_handler(tauri::generate_handler![
             login,
@@ -923,6 +926,11 @@ pub fn run() {
             fl_script_status,
             install_fl_script,
             bridge_status,
+            automix::automix_analyze,
+            automix::automix_update_setting,
+            automix::automix_update_stem_type,
+            automix::automix_render,
+            automix::automix_get_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
