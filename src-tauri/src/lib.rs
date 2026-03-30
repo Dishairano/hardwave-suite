@@ -930,6 +930,7 @@ pub fn run() {
             automix::automix_update_setting,
             automix::automix_update_stem_type,
             automix::automix_render,
+            automix::automix_render_path,
             automix::automix_get_session,
         ])
         .run(tauri::generate_context!())

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import type { User } from '../lib/api'
 import * as automix from '../lib/automix'
 import type { StemAnalysis, StemMixSettings, AutoMixSession, StemType, MixGenre } from '../lib/automix'
-import { Upload, Play, Download, RotateCcw, Volume2, VolumeX, ChevronDown } from 'lucide-react'
+import { Upload, Download, RotateCcw, ChevronDown } from 'lucide-react'
 
 interface AutoMixViewProps {
   user: User
@@ -192,7 +192,7 @@ function StemRow({ stem, settings, onUpdate, onUpdateType }: {
 
 // ─── Main View ─────────────────────────────────────────────────────────────
 
-export function AutoMixView({ user }: AutoMixViewProps) {
+export function AutoMixView({ user: _user }: AutoMixViewProps) {
   const [session, setSession] = useState<AutoMixSession | null>(null)
   const [genre, setGenre] = useState<MixGenre>('Hardstyle')
   const [targetLufs, setTargetLufs] = useState(-8)
@@ -229,21 +229,25 @@ export function AutoMixView({ user }: AutoMixViewProps) {
     }
   }, [genre, targetLufs])
 
-  const handleFilePick = useCallback(async () => {
-    try {
-      const { open } = await import('@tauri-apps/plugin-dialog')
-      const selected = await open({
-        multiple: true,
-        filters: [{ name: 'Audio', extensions: ['wav', 'wave'] }],
-      })
-      if (!selected || (Array.isArray(selected) && selected.length === 0)) return
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
-      const paths = Array.isArray(selected) ? selected.map(s => typeof s === 'string' ? s : s.path) : [typeof selected === 'string' ? selected : selected.path]
+  const handleFilePick = useCallback(() => {
+    fileInputRef.current?.click()
+  }, [])
+
+  const handleFileInput = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files || files.length === 0) return
+    const paths = Array.from(files).filter(f => /\.(wav|wave)$/i.test(f.name)).map(f => (f as any).path as string).filter(Boolean)
+    if (paths.length === 0) return
+    try {
       const result = await automix.analyze(paths, genre, targetLufs)
       setSession(result)
     } catch (err) {
       console.error('File pick failed:', err)
     }
+    // Reset input so same files can be re-selected
+    e.target.value = ''
   }, [genre, targetLufs])
 
   const handleUpdateSetting = useCallback(async (stemId: string, field: string, value: number) => {
@@ -275,20 +279,16 @@ export function AutoMixView({ user }: AutoMixViewProps) {
   }, [])
 
   const handleRender = useCallback(async () => {
+    // Render to user's Downloads folder
+    const downloadsPath = await automix.getDefaultRenderPath()
+    if (!downloadsPath) return
+    setRendering(true)
     try {
-      const { save } = await import('@tauri-apps/plugin-dialog')
-      const path = await save({
-        filters: [{ name: 'WAV Audio', extensions: ['wav'] }],
-        defaultPath: 'automix-output.wav',
-      })
-      if (!path) return
-      setRendering(true)
-      await automix.render(path)
-      setRendering(false)
+      await automix.render(downloadsPath)
     } catch (err) {
       console.error('Render failed:', err)
-      setRendering(false)
     }
+    setRendering(false)
   }, [])
 
   const handleReset = useCallback(() => {
@@ -347,6 +347,15 @@ export function AutoMixView({ user }: AutoMixViewProps) {
             <div className="text-xs text-zinc-500 mt-1">or click to browse</div>
           </div>
         </div>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".wav,.wave"
+          multiple
+          className="hidden"
+          onChange={handleFileInput}
+        />
 
         {progress && (
           <div className="text-xs text-zinc-400 flex items-center gap-2">

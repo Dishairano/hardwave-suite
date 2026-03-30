@@ -105,6 +105,10 @@ export async function getSession(): Promise<AutoMixSession | null> {
   return invoke<AutoMixSession | null>('automix_get_session')
 }
 
+export async function getDefaultRenderPath(): Promise<string | null> {
+  return invoke<string | null>('automix_render_path')
+}
+
 export async function onProgress(
   callback: (progress: AutoMixProgress) => void,
 ): Promise<() => void> {

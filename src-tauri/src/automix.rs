@@ -864,6 +864,15 @@ pub async fn automix_render(
 }
 
 #[tauri::command]
+pub fn automix_render_path() -> Result<Option<String>, String> {
+    let downloads = dirs::download_dir()
+        .or_else(|| dirs::home_dir().map(|h| h.join("Downloads")))
+        .ok_or("Cannot find Downloads folder")?;
+    let path = downloads.join("automix-output.wav");
+    Ok(Some(path.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
 pub fn automix_get_session(
     state: tauri::State<'_, super::AppState>,
 ) -> Result<Option<AutoMixSession>, String> {
