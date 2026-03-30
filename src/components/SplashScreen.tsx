@@ -221,7 +221,13 @@ export function SplashScreen({ dataReady, onFinished }: SplashScreenProps) {
         <div ref={ring1Ref} className="absolute w-24 h-24 rounded-full border-2 border-red-600/40 opacity-0" style={{ top: '0' }} />
         <div ref={ring2Ref} className="absolute w-24 h-24 rounded-full border-2 border-red-500/20 opacity-0" style={{ top: '0' }} />
 
-        <HwLogo ref={logoRef} size={96} className="opacity-0" />
+        {/* Logo with rounded container + shine sweep */}
+        <div ref={logoRef} className="relative overflow-hidden rounded-3xl opacity-0" style={{ width: 96, height: 96 }}>
+          <HwLogo size={96} />
+          <div ref={shineRef} className="absolute inset-0" style={{
+            background: 'linear-gradient(105deg, transparent 40%, rgba(255,255,255,0.25) 50%, transparent 60%)',
+          }} />
+        </div>
 
         <h1 ref={titleRef} className="text-3xl font-bold text-white mt-6 opacity-0">Hardwave Suite</h1>
         <p ref={subtitleRef} className="text-sm text-zinc-500 mt-2 opacity-0">Audio Production Hub</p>
