@@ -6,6 +6,7 @@ import { HubView } from './views/HubView'
 import { CollabsView } from './views/CollabsView'
 import { AutoMixView } from './views/AutoMixView'
 import { UpdateModal } from './components/UpdateModal'
+import { CrashReportModal } from './components/CrashReportModal'
 import { Package, Users, Sliders } from 'lucide-react'
 import * as api from './lib/api'
 import type { Product } from './lib/api'
@@ -30,6 +31,7 @@ export default function App() {
   const [preloadedProducts, setPreloadedProducts] = useState<Product[] | null>(null)
   const [preloadedVersions, setPreloadedVersions] = useState<Record<string, string> | null>(null)
   const [activeTab, setActiveTab] = useState<'hub' | 'collabs' | 'automix'>('hub')
+  const [crashReport, setCrashReport] = useState<api.CrashReport | null>(null)
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo>({
     version: '',
     changelog: '',
@@ -90,6 +92,9 @@ export default function App() {
 
       setDataReady(true)
       checkForUpdates()
+
+      // Check for crash reports from plugins
+      api.checkCrashReport().then(r => { if (r) setCrashReport(r) }).catch(() => {})
     }
     init()
   }, [])
@@ -238,6 +243,10 @@ export default function App() {
           <AutoMixView user={user} />
         )}
       </div>
+
+      {crashReport && (
+        <CrashReportModal report={crashReport} onDone={() => setCrashReport(null)} />
+      )}
 
       {updateInfo.available && !updateInfo.dismissed && (
         <UpdateModal

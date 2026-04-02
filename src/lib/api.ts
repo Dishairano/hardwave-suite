@@ -134,6 +134,26 @@ export async function pickFolder(title: string): Promise<string | null> {
   return invoke<string | null>('pick_folder', { title })
 }
 
+// Crash report
+export interface CrashReport {
+  plugin: string
+  version: string
+  timestamp: string
+  logPath: string
+}
+
+export async function checkCrashReport(): Promise<CrashReport | null> {
+  return invoke<CrashReport | null>('check_crash_report')
+}
+
+export async function uploadCrashReport(): Promise<string> {
+  return invoke<string>('upload_crash_report')
+}
+
+export async function dismissCrashReport(): Promise<void> {
+  return invoke('dismiss_crash_report')
+}
+
 // Progress event listener
 export async function onDownloadProgress(
   callback: (p: DownloadProgress) => void,

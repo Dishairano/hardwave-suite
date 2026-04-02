@@ -808,6 +808,101 @@ fn install_fl_script() -> Result<String, String> {
     Ok(dir.to_string_lossy().to_string())
 }
 
+// ── Crash Report Commands ──
+
+/// Hardwave shared data directory (same as the plugin uses).
+fn hardwave_data_dir() -> std::path::PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("hardwave")
+}
+
+/// Check if any plugin left a crash-pending sentinel.
+/// Returns { plugin, version, timestamp, logPath } or null.
+#[tauri::command]
+fn check_crash_report() -> Option<serde_json::Value> {
+    let pending = hardwave_data_dir().join("analyser-crash-pending");
+    if !pending.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&pending).unwrap_or_default();
+    let lines: Vec<&str> = content.lines().collect();
+    let plugin = lines.first().unwrap_or(&"unknown").to_string();
+    let version = lines.get(1).unwrap_or(&"unknown").to_string();
+    let timestamp = lines.get(2).unwrap_or(&"").to_string();
+    let log_path = hardwave_data_dir()
+        .join(format!("{}-crash.log", plugin))
+        .to_string_lossy()
+        .to_string();
+    Some(serde_json::json!({
+        "plugin": plugin,
+        "version": version,
+        "timestamp": timestamp,
+        "logPath": log_path,
+    }))
+}
+
+/// Upload the crash log to the Hardwave document archive and clear the sentinel.
+#[tauri::command]
+async fn upload_crash_report() -> Result<String, String> {
+    let pending = hardwave_data_dir().join("analyser-crash-pending");
+    let content = std::fs::read_to_string(&pending).unwrap_or_default();
+    let lines: Vec<&str> = content.lines().collect();
+    let plugin = lines.first().unwrap_or(&"analyser").to_string();
+
+    let log_path = hardwave_data_dir().join(format!("{}-crash.log", plugin));
+    if !log_path.exists() {
+        // No crash log to upload — just clear sentinel
+        let _ = std::fs::remove_file(&pending);
+        return Err("No crash log found".into());
+    }
+
+    let log_content = std::fs::read(&log_path).map_err(|e| format!("Failed to read crash log: {}", e))?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let filename = format!("{}-crash-{}.log", plugin, ts);
+
+    // Upload to the Hardwave document archive
+    let client = reqwest::Client::new();
+    let form = reqwest::multipart::Form::new()
+        .text("category", "crash-reports")
+        .text("description", format!("Crash report from {} plugin", plugin))
+        .part("file", reqwest::multipart::Part::bytes(log_content)
+            .file_name(filename)
+            .mime_str("text/plain")
+            .unwrap());
+
+    let res = client
+        .post("https://erp.hardwavestudios.com/api/erp/archive")
+        .header("x-api-key", "540f288f51ee8029e2d9c085c4ea0b58880dfdde8c68b33b66847829cbd5235e")
+        .header("x-server-origin", "hardwave-suite")
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Upload failed: {}", e))?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        return Err(format!("Upload failed ({}): {}", status, body));
+    }
+
+    // Clear the sentinel and the crash log
+    let _ = std::fs::remove_file(&pending);
+    let _ = std::fs::remove_file(&log_path);
+
+    Ok("Crash report uploaded successfully".into())
+}
+
+/// Dismiss the crash report without uploading.
+#[tauri::command]
+fn dismiss_crash_report() {
+    let pending = hardwave_data_dir().join("analyser-crash-pending");
+    let _ = std::fs::remove_file(&pending);
+}
+
 // ── Collab Commands ──
 
 #[tauri::command]
@@ -918,6 +1013,9 @@ pub fn run() {
             get_install_paths,
             set_install_path,
             pick_folder,
+            check_crash_report,
+            upload_crash_report,
+            dismiss_crash_report,
             collab_create,
             collab_join,
             collab_leave,
