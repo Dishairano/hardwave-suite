@@ -3,8 +3,8 @@ import { LoginScreen } from './components/LoginScreen'
 import { SplashScreen } from './components/SplashScreen'
 import { Onboarding } from './components/Onboarding'
 import { HubView } from './views/HubView'
-import { CollabsView } from './views/CollabsView'
-import { AutoMixView } from './views/AutoMixView'
+// import { CollabsView } from './views/CollabsView'
+// import { AutoMixView } from './views/AutoMixView'
 import { UpdateModal } from './components/UpdateModal'
 import { CrashReportModal } from './components/CrashReportModal'
 import { Package, Users, Sliders } from 'lucide-react'
@@ -203,34 +203,7 @@ export default function App() {
             <div className="absolute bottom-0 left-2 right-2 h-[2px] bg-red-500 rounded-full" />
           )}
         </button>
-        <button
-          onClick={() => setActiveTab('collabs')}
-          className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium transition-all relative ${
-            activeTab === 'collabs'
-              ? 'text-white'
-              : 'text-zinc-500 hover:text-zinc-300'
-          }`}
-        >
-          <Users size={13} />
-          Collabs
-          {activeTab === 'collabs' && (
-            <div className="absolute bottom-0 left-2 right-2 h-[2px] bg-red-500 rounded-full" />
-          )}
-        </button>
-        <button
-          onClick={() => setActiveTab('automix')}
-          className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium transition-all relative ${
-            activeTab === 'automix'
-              ? 'text-white'
-              : 'text-zinc-500 hover:text-zinc-300'
-          }`}
-        >
-          <Sliders size={13} />
-          AutoMix
-          {activeTab === 'automix' && (
-            <div className="absolute bottom-0 left-2 right-2 h-[2px] bg-red-500 rounded-full" />
-          )}
-        </button>
+        {/* Collabs and AutoMix hidden until ready */}
       </div>
 
       {/* Content */}
