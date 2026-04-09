@@ -114,10 +114,24 @@ fn mark_uninstalled(slug: &str) {
 }
 
 fn default_vst3_dir() -> std::path::PathBuf {
+    // Per-user VST3 paths so installs never need elevation. All major DAWs
+    // (FL Studio, Ableton, Studio One, Bitwig, Reaper, Cubase, Logic) scan
+    // these in addition to the system folder. Users can still override
+    // `vst3_path` in settings to point at the system folder if they want.
     #[cfg(target_os = "windows")]
-    { std::path::PathBuf::from(r"C:\Program Files\Common Files\VST3") }
+    {
+        // %LOCALAPPDATA%\Programs\Common\VST3 — Steinberg's per-user spec path.
+        dirs::data_local_dir()
+            .map(|p| p.join("Programs").join("Common").join("VST3"))
+            .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Program Files\Common Files\VST3"))
+    }
     #[cfg(target_os = "macos")]
-    { std::path::PathBuf::from("/Library/Audio/Plug-Ins/VST3") }
+    {
+        // ~/Library/Audio/Plug-Ins/VST3
+        dirs::home_dir()
+            .map(|p| p.join("Library").join("Audio").join("Plug-Ins").join("VST3"))
+            .unwrap_or_else(|| std::path::PathBuf::from("/Library/Audio/Plug-Ins/VST3"))
+    }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     { dirs::home_dir().unwrap_or_default().join(".vst3") }
 }
