@@ -110,12 +110,76 @@ jobs:
 
           Remove-Item $certPath -Force
 
+      - name: Create portable Windows zip
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $staging = "staging/Hardwave Suite"
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+
+          # Grab the raw Tauri-built executable (what NSIS would install).
+          $rawExe = Get-ChildItem -Path src-tauri/target/release -Filter "hardwave-suite.exe" -File | Select-Object -First 1
+          if (-not $rawExe) { throw "hardwave-suite.exe not found in target/release" }
+          Copy-Item $rawExe.FullName "$staging/Hardwave Suite.exe"
+
+          # Include any resource DLLs sitting next to the binary (e.g. WebView2Loader if not statically linked).
+          Get-ChildItem -Path src-tauri/target/release -Filter *.dll -File -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName "$staging/"
+          }
+
+          # Include resources dir if Tauri produced one next to the binary.
+          if (Test-Path "src-tauri/target/release/resources") {
+            Copy-Item "src-tauri/target/release/resources" "$staging/resources" -Recurse
+          }
+
+          # Zip as the payload the installer will download.
+          Compress-Archive -Path "$staging/*" -DestinationPath "hardwave-suite-portable-windows.zip" -Force
+          Get-Item hardwave-suite-portable-windows.zip | Select-Object Name,Length
+
+      - name: Build Hardwave Suite installer (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        working-directory: installer
+        run: |
+          npm install
+          # Skip the Tauri bundler: we want the raw .exe, not another NSIS wrap.
+          npm run tauri:build -- --no-bundle
+
+      - name: Stage installer as HardwaveSuite-Setup.exe
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $installerExe = Get-ChildItem -Path installer/src-tauri/target/release -Filter "hardwave-suite-installer.exe" -File | Select-Object -First 1
+          if (-not $installerExe) { throw "hardwave-suite-installer.exe not found" }
+          Copy-Item $installerExe.FullName "HardwaveSuite-Setup.exe"
+          Get-Item HardwaveSuite-Setup.exe | Select-Object Name,Length
+
+      - name: Sign HardwaveSuite-Setup.exe
+        if: matrix.platform == 'windows-latest' && env.WINDOWS_CERTIFICATE != ''
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        shell: powershell
+        run: |
+          $certBytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          $certPath = Join-Path $env:RUNNER_TEMP "installer-cert.pfx"
+          [IO.File]::WriteAllBytes($certPath, $certBytes)
+
+          $cert = Import-PfxCertificate -FilePath $certPath `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force)
+
+          & signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /sha1 $cert.Thumbprint HardwaveSuite-Setup.exe
+          Remove-Item $certPath -Force
+
       - name: Upload Windows artifacts
         if: matrix.platform == 'windows-latest'
         uses: softprops/action-gh-release@v2
         with:
           draft: false
           files: |
+            HardwaveSuite-Setup.exe
+            hardwave-suite-portable-windows.zip
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/nsis/*.exe.sig
             src-tauri/target/release/bundle/msi/*.msi

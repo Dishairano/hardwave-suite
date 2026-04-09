@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: "Inter", system-ui, -apple-system, Segoe UI, sans-serif;
+  color: #f0f0f5;
+  user-select: none;
+  cursor: default;
+}
+
+button {
+  font-family: inherit;
+}
+
+/* Custom scrollbar for the release-notes block */
+.hw-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.hw-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.hw-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+}
+.hw-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Accent gradient used for the primary action and the progress bar */
+.hw-accent-gradient {
+  background: linear-gradient(135deg, #ff7a1f 0%, #e85d00 50%, #b84600 100%);
+}
+
+.hw-accent-text {
+  background: linear-gradient(135deg, #ff7a1f 0%, #e85d00 50%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
