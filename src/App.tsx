@@ -7,7 +7,7 @@ import { HubView } from './views/HubView'
 // import { AutoMixView } from './views/AutoMixView'
 import { UpdateModal } from './components/UpdateModal'
 import { CrashReportModal } from './components/CrashReportModal'
-import { Package, Users, Sliders } from 'lucide-react'
+import { Package } from 'lucide-react'
 import * as api from './lib/api'
 import type { Product } from './lib/api'
 
@@ -208,13 +208,7 @@ export default function App() {
 
       {/* Content */}
       <div className="flex-1 overflow-hidden flex flex-col">
-        {activeTab === 'hub' ? (
-          <HubView user={user} onLogout={handleLogout} preloadedProducts={preloadedProducts} preloadedVersions={preloadedVersions} />
-        ) : activeTab === 'collabs' ? (
-          <CollabsView user={user} />
-        ) : (
-          <AutoMixView user={user} />
-        )}
+        <HubView user={user} onLogout={handleLogout} preloadedProducts={preloadedProducts} preloadedVersions={preloadedVersions} />
       </div>
 
       {crashReport && (
