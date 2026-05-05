@@ -1,5 +1,6 @@
 mod api;
 mod automix;
+mod beta;
 mod bridge;
 mod collabs;
 mod models;
@@ -994,6 +995,91 @@ async fn bridge_status(state: State<'_, AppState>) -> Result<serde_json::Value, 
     }))
 }
 
+// ── Beta channel commands ──
+
+#[tauri::command]
+async fn get_subscription_info(
+    state: State<'_, AppState>,
+) -> Result<beta::SubscriptionInfo, String> {
+    let token = state
+        .api_token
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Not authenticated")?;
+    beta::fetch_subscription(&token).await
+}
+
+#[tauri::command]
+async fn get_beta_manifest(state: State<'_, AppState>) -> Result<Vec<beta::BetaPlugin>, String> {
+    let token = state
+        .api_token
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Not authenticated")?;
+    beta::fetch_beta_manifest(&token).await
+}
+
+#[tauri::command]
+fn get_update_channel() -> String {
+    beta::read_update_channel()
+}
+
+#[tauri::command]
+fn set_update_channel(channel: String) -> Result<(), String> {
+    beta::write_update_channel(&channel)
+}
+
+#[tauri::command]
+fn get_auto_attach_crash_logs() -> bool {
+    beta::read_auto_attach_crash_logs()
+}
+
+#[tauri::command]
+fn set_auto_attach_crash_logs(enabled: bool) -> Result<(), String> {
+    beta::write_auto_attach_crash_logs(enabled)
+}
+
+#[tauri::command]
+async fn install_beta_build(
+    slug: String,
+    version: String,
+    url: String,
+    sha256: String,
+    expires_at: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let token = state.api_token.lock().unwrap().clone();
+    beta::install_beta_build(token.as_deref(), &slug, &version, &url, &sha256, &expires_at).await
+}
+
+#[tauri::command]
+async fn open_external_url(url: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", url.as_str()])
+            .spawn()
+            .map_err(|e| format!("Failed to open URL: {}", e))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url.as_str())
+            .spawn()
+            .map_err(|e| format!("Failed to open URL: {}", e))?;
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url.as_str())
+            .spawn()
+            .map_err(|e| format!("Failed to open URL: {}", e))?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1006,6 +1092,8 @@ pub fn run() {
                     .plugin(tauri_plugin_updater::Builder::new().build())?;
                 app.handle().plugin(tauri_plugin_process::init())?;
             }
+            // Background expiry watcher for installed beta builds.
+            beta::spawn_expiry_watcher(app.handle().clone());
             Ok(())
         })
         .manage(AppState {
@@ -1044,6 +1132,14 @@ pub fn run() {
             automix::automix_render,
             automix::automix_render_path,
             automix::automix_get_session,
+            get_subscription_info,
+            get_beta_manifest,
+            get_update_channel,
+            set_update_channel,
+            get_auto_attach_crash_logs,
+            set_auto_attach_crash_logs,
+            install_beta_build,
+            open_external_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

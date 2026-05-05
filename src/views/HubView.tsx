@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useReducer, useCallback, useState, useRef } from 'react'
 import { Download, Package, FolderOpen, CheckCircle, Loader2, AlertCircle, LogOut, RefreshCw, ArrowUpCircle, Trash2, Settings, Music } from 'lucide-react'
 import { SettingsPanel } from '../components/SettingsPanel'
+import { BetaBuildsSection } from '../components/BetaBuildsSection'
 import { HwLogo } from '../components/HwLogo'
 import { getVersion } from '@tauri-apps/api/app'
 import anime from 'animejs'
 import * as api from '../lib/api'
-import type { Product } from '../lib/api'
+import type { Product, SubscriptionInfo, UpdateChannel } from '../lib/api'
 
 interface HubViewProps {
   user: api.User
@@ -59,6 +60,8 @@ export function HubView({ user, onLogout, preloadedProducts, preloadedVersions }
   const [downloads, dispatch] = useReducer(dlReducer, {})
   const [installedVersions, setInstalledVersions] = useState<Record<string, string>>(preloadedVersions ?? {})
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [updateChannel, setUpdateChannel] = useState<UpdateChannel>('stable')
+  const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null)
 
   const headerRef = useRef<HTMLElement>(null)
   const greetingRef = useRef<HTMLDivElement>(null)
@@ -69,6 +72,29 @@ export function HubView({ user, onLogout, preloadedProducts, preloadedVersions }
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => {})
+  }, [])
+
+  const loadChannelAndSubscription = useCallback(async () => {
+    try {
+      const [ch, sub] = await Promise.all([
+        api.getUpdateChannel().catch(() => 'stable' as UpdateChannel),
+        api.getSubscriptionInfo().catch(() => null),
+      ])
+      setUpdateChannel(ch)
+      setSubscription(sub)
+    } catch {
+      /* non-blocking */
+    }
+  }, [])
+
+  useEffect(() => { loadChannelAndSubscription() }, [loadChannelAndSubscription])
+
+  const handleSubscribe = useCallback(async () => {
+    try {
+      await api.openExternalUrl('https://hardwavestudios.com/pricing')
+    } catch {
+      window.open('https://hardwavestudios.com/pricing', '_blank')
+    }
   }, [])
 
   // Entrance animations
@@ -236,7 +262,13 @@ export function HubView({ user, onLogout, preloadedProducts, preloadedVersions }
         </div>
       </header>
 
-      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsPanel
+        open={settingsOpen}
+        onClose={() => {
+          setSettingsOpen(false)
+          loadChannelAndSubscription()
+        }}
+      />
 
       {/* Content */}
       <main className="relative flex-1 overflow-y-auto">
@@ -270,6 +302,12 @@ export function HubView({ user, onLogout, preloadedProducts, preloadedVersions }
               ))}
             </div>
           )}
+
+          <BetaBuildsSection
+            channel={updateChannel}
+            subscription={subscription}
+            onSubscribe={handleSubscribe}
+          />
         </div>
       </main>
     </div>

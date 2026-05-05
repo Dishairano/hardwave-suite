@@ -191,3 +191,96 @@ export function clearSession() {
   localStorage.removeItem('hw_user')
   clearHwCookie()
 }
+
+// ── Beta channel ──
+
+export type UpdateChannel = 'stable' | 'beta'
+
+export interface SubscriptionInfo {
+  hasSubscription: boolean
+  betaEligible: boolean
+  planName: string | null
+  status: string | null
+  currentPeriodEnd: string | null
+}
+
+export interface BetaPlugin {
+  id: number
+  pluginSlug: string
+  version: string
+  releasedAt: string
+  expiresAt: string
+  hoursUntilExpiry: number
+  hoursUntilSoftWarn: number
+  artefactUrl: string
+  artefactSha256: string
+  artefactSize: number
+  changelog: string | null
+}
+
+export interface BetaWarningEvent {
+  slug: string
+  version: string
+  expires_at: string
+}
+
+export async function getSubscriptionInfo(): Promise<SubscriptionInfo> {
+  return invoke<SubscriptionInfo>('get_subscription_info')
+}
+
+export async function getBetaManifest(): Promise<BetaPlugin[]> {
+  return invoke<BetaPlugin[]>('get_beta_manifest')
+}
+
+export async function getUpdateChannel(): Promise<UpdateChannel> {
+  const v = await invoke<string>('get_update_channel')
+  return v === 'beta' ? 'beta' : 'stable'
+}
+
+export async function setUpdateChannel(channel: UpdateChannel): Promise<void> {
+  return invoke('set_update_channel', { channel })
+}
+
+export async function getAutoAttachCrashLogs(): Promise<boolean> {
+  return invoke<boolean>('get_auto_attach_crash_logs')
+}
+
+export async function setAutoAttachCrashLogs(enabled: boolean): Promise<void> {
+  return invoke('set_auto_attach_crash_logs', { enabled })
+}
+
+export async function installBetaBuild(
+  slug: string,
+  version: string,
+  url: string,
+  sha256: string,
+  expiresAt: string,
+): Promise<string> {
+  return invoke<string>('install_beta_build', {
+    slug,
+    version,
+    url,
+    sha256,
+    expiresAt,
+  })
+}
+
+export async function openExternalUrl(url: string): Promise<void> {
+  return invoke('open_external_url', { url })
+}
+
+export async function onBetaSoftWarning(
+  callback: (e: BetaWarningEvent) => void,
+): Promise<() => void> {
+  if (!isTauri) return () => {}
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<BetaWarningEvent>('beta:soft-warning', (e) => callback(e.payload))
+}
+
+export async function onBetaExpired(
+  callback: (e: BetaWarningEvent) => void,
+): Promise<() => void> {
+  if (!isTauri) return () => {}
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<BetaWarningEvent>('beta:expired', (e) => callback(e.payload))
+}

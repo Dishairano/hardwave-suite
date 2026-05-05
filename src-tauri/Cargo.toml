@@ -1,6 +1,6 @@
 [package]
 name = "hardwave-suite"
-version = "0.15.6"
+version = "0.16.0"
 edition = "2021"
 
 [lib]
@@ -24,6 +24,9 @@ flate2 = "1"
 tar = "0.4"
 tauri-plugin-dialog = "2.6.0"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+sha2 = "0.10"
+toml = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
