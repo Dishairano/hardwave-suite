@@ -452,7 +452,7 @@ struct BetaWarningPayload {
 /// (24h before expiry by default) and `beta:expired` once when it elapses.
 /// Expired builds are renamed to `<slug>.expired` so DAW scans skip them.
 pub fn spawn_expiry_watcher(app: AppHandle) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         loop {
             if let Err(e) = tick(&app).await {
                 eprintln!("[beta watcher] tick failed: {}", e);
