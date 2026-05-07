@@ -236,26 +236,30 @@ export default function App() {
     return <Onboarding onComplete={handleOnboardingComplete} />
   }
 
-  // Map sidebar view → content props
-  const filter: 'all' | 'installed' | 'updates' =
-    view === 'installed' ? 'installed' : view === 'updates' ? 'updates' : 'all'
+  // Map sidebar view → content props. Beta builds is a filtered view of the
+  // same product grid (only plug-ins where isBetaProduct(p) === true). Beta
+  // plug-ins still appear on Plug-ins / Installed / Updates because they're
+  // in the same product list — this tab just narrows to the beta cohort.
+  const filter: 'all' | 'installed' | 'updates' | 'beta' =
+    view === 'installed' ? 'installed'
+    : view === 'updates' ? 'updates'
+    : view === 'beta' ? 'beta'
+    : 'all'
 
   const topbarTitle = topbarTitleFor(view)
   const topbarMeta = topbarMetaFor(view, counts)
 
-  const showHub = view === 'plugins' || view === 'installed' || view === 'updates'
-  const showBeta = view === 'beta'
+  const showHub = view === 'plugins' || view === 'installed' || view === 'updates' || view === 'beta'
   const showHelp = view === 'help'
 
   return (
     <div className="app-shell">
-      {/* Tauri title bar (drag region) */}
+      {/* Tauri title bar — drag region only. Native OS window controls
+          (Windows ⨯ □ ─ on the right, macOS traffic lights top-left) are
+          rendered by the OS via `decorations: true` in tauri.conf.json,
+          so we don't paint our own. The 32px strip is just a draggable
+          ribbon with the app name. */}
       <div className="titlebar" data-tauri-drag-region>
-        <div className="tb-dots">
-          <span className="tb-dot r" />
-          <span className="tb-dot y" />
-          <span className="tb-dot g" />
-        </div>
         <div className="tb-title">Hardwave Suite</div>
         <div className="tb-version">{appVersion ? `v${appVersion}` : ''}</div>
       </div>
@@ -296,6 +300,17 @@ export default function App() {
 
           {showHub && (
             <div className="content">
+              {view === 'beta' && (
+                /* Channel switcher + subscription gating sits above the card
+                   grid. Tells the user whether they're on stable or beta auto-
+                   updates and offers Pro upgrade if not subscribed. The actual
+                   per-plug-in beta builds render as cards below. */
+                <BetaBuildsSection
+                  channel={updateChannel}
+                  subscription={subscription}
+                  onSubscribe={handleSubscribe}
+                />
+              )}
               <HubView
                 preloadedProducts={preloadedProducts}
                 preloadedVersions={preloadedVersions}
@@ -303,22 +318,6 @@ export default function App() {
                 search={search}
                 onCountsChange={setCounts}
                 onLastSyncChange={setLastSync}
-              />
-            </div>
-          )}
-
-          {showBeta && (
-            <div className="content">
-              <div className="hub-h">
-                <div>
-                  <h1>Beta builds</h1>
-                  <p className="lede">Time-limited cutting-edge builds for subscribers.</p>
-                </div>
-              </div>
-              <BetaBuildsSection
-                channel={updateChannel}
-                subscription={subscription}
-                onSubscribe={handleSubscribe}
               />
             </div>
           )}

@@ -21,7 +21,7 @@ import { isBetaProduct } from '../lib/beta'
 interface HubViewProps {
   preloadedProducts?: Product[] | null
   preloadedVersions?: Record<string, string> | null
-  filter?: 'all' | 'installed' | 'updates'
+  filter?: 'all' | 'installed' | 'updates' | 'beta'
   search?: string
   onCountsChange?: (counts: HubCounts) => void
   onLastSyncChange?: (lastSync: Date | null) => void
@@ -234,6 +234,8 @@ export function HubView({
         const v = installedVersions[p.slug]
         return v && v !== p.version
       })
+    } else if (filter === 'beta') {
+      list = list.filter(isBetaProduct)
     }
     const q = search.trim().toLowerCase()
     if (q) {
@@ -366,32 +368,37 @@ export function HubView({
   )
 }
 
-function filterTitle(f: 'all' | 'installed' | 'updates'): string {
+function filterTitle(f: 'all' | 'installed' | 'updates' | 'beta'): string {
   switch (f) {
     case 'installed':
       return 'Installed'
     case 'updates':
       return 'Updates'
+    case 'beta':
+      return 'Beta builds'
     default:
       return 'Library'
   }
 }
 
-function filterLede(f: 'all' | 'installed' | 'updates'): string {
+function filterLede(f: 'all' | 'installed' | 'updates' | 'beta'): string {
   switch (f) {
     case 'installed':
       return 'Plug-ins currently installed on this machine.'
     case 'updates':
       return 'New builds for plug-ins you already have installed.'
+    case 'beta':
+      return 'Time-limited cutting-edge builds for subscribers. Each plug-in still in beta is listed below — they also appear on Plug-ins, Installed, and Updates.'
     default:
       return 'Every Hardwave plug-in. Installed locally where they belong.'
   }
 }
 
-function filterEmptyCopy(f: 'all' | 'installed' | 'updates', search: string): string {
+function filterEmptyCopy(f: 'all' | 'installed' | 'updates' | 'beta', search: string): string {
   if (search) return `No plug-ins match “${search}”.`
   if (f === 'installed') return 'You haven’t installed any plug-ins yet. Switch to Plug-ins to grab one.'
   if (f === 'updates') return 'You’re fully up to date. Nothing to install.'
+  if (f === 'beta') return 'No plug-ins are currently in beta — everything in the catalogue is stable.'
   return 'No plug-ins to show.'
 }
 
