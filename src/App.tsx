@@ -1,15 +1,17 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { Search, LogOut } from 'lucide-react'
 import { LoginScreen } from './components/LoginScreen'
 import { SplashScreen } from './components/SplashScreen'
 import { Onboarding } from './components/Onboarding'
-import { HubView } from './views/HubView'
-// import { CollabsView } from './views/CollabsView'
-// import { AutoMixView } from './views/AutoMixView'
+import { HubView, type HubCounts } from './views/HubView'
 import { UpdateModal } from './components/UpdateModal'
 import { CrashReportModal } from './components/CrashReportModal'
-import { Package } from 'lucide-react'
+import { Sidebar, type SidebarView } from './components/Sidebar'
+import { SettingsPanel } from './components/SettingsPanel'
+import { BetaBuildsSection } from './components/BetaBuildsSection'
+import { getVersion } from '@tauri-apps/api/app'
 import * as api from './lib/api'
-import type { Product } from './lib/api'
+import type { Product, SubscriptionInfo, UpdateChannel } from './lib/api'
 
 interface UpdateInfo {
   version: string
@@ -30,7 +32,6 @@ export default function App() {
   const [dataReady, setDataReady] = useState(false)
   const [preloadedProducts, setPreloadedProducts] = useState<Product[] | null>(null)
   const [preloadedVersions, setPreloadedVersions] = useState<Record<string, string> | null>(null)
-  const [activeTab, setActiveTab] = useState<'hub' | 'collabs' | 'automix'>('hub')
   const [crashReport, setCrashReport] = useState<api.CrashReport | null>(null)
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo>({
     version: '',
@@ -44,6 +45,16 @@ export default function App() {
     error: null,
   })
   const initRan = useRef(false)
+
+  // Shell-level UI state
+  const [view, setView] = useState<SidebarView>('plugins')
+  const [search, setSearch] = useState('')
+  const [counts, setCounts] = useState<HubCounts>({ total: 0, installed: 0, updates: 0, beta: 0 })
+  const [appVersion, setAppVersion] = useState('')
+  const [lastSync, setLastSync] = useState<Date | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [updateChannel, setUpdateChannel] = useState<UpdateChannel>('stable')
+  const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null)
 
   useEffect(() => {
     if (initRan.current) return
@@ -76,7 +87,6 @@ export default function App() {
         }
       }
 
-      // Preload products if authenticated
       if (authenticated) {
         try {
           const [prods, installed] = await Promise.all([
@@ -85,18 +95,46 @@ export default function App() {
           ])
           setPreloadedProducts(prods)
           setPreloadedVersions(installed)
+          setLastSync(new Date())
         } catch {
-          // Products will load in HubView as fallback
+          /* HubView will load as a fallback */
         }
       }
 
       setDataReady(true)
       checkForUpdates()
-
-      // Check for crash reports from plugins
-      api.checkCrashReport().then(r => { if (r) setCrashReport(r) }).catch(() => {})
+      api.checkCrashReport().then((r) => { if (r) setCrashReport(r) }).catch(() => {})
     }
     init()
+  }, [])
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => {})
+  }, [])
+
+  const loadChannelAndSubscription = useCallback(async () => {
+    try {
+      const [ch, sub] = await Promise.all([
+        api.getUpdateChannel().catch(() => 'stable' as UpdateChannel),
+        api.getSubscriptionInfo().catch(() => null),
+      ])
+      setUpdateChannel(ch)
+      setSubscription(sub)
+    } catch {
+      /* non-blocking */
+    }
+  }, [])
+
+  useEffect(() => {
+    if (user) loadChannelAndSubscription()
+  }, [user, loadChannelAndSubscription])
+
+  const handleSubscribe = useCallback(async () => {
+    try {
+      await api.openExternalUrl('https://hardwavestudios.com/pricing')
+    } catch {
+      window.open('https://hardwavestudios.com/pricing', '_blank')
+    }
   }, [])
 
   const checkForUpdates = async () => {
@@ -128,7 +166,10 @@ export default function App() {
           if (total > 0) {
             setUpdateInfo((prev) => {
               const chunkLen = (event.data as { chunkLength?: number }).chunkLength || 0
-              const newProgress = Math.min(100, Math.round(((prev.progress / 100) * total + chunkLen) / total * 100))
+              const newProgress = Math.min(
+                100,
+                Math.round((((prev.progress / 100) * total + chunkLen) / total) * 100),
+              )
               return { ...prev, progress: newProgress }
             })
           }
@@ -163,15 +204,25 @@ export default function App() {
     setShowOnboarding(false)
   }
 
-  const handleLogout = async () => {
+  const handleLogout = useCallback(async () => {
     try { await api.logout() } catch { /* ignore */ }
     api.clearSession()
     setUser(null)
-  }
+  }, [])
 
   const handleSplashFinished = useCallback(() => {
     setShowSplash(false)
   }, [])
+
+  const handleSidebarSelect = useCallback((next: SidebarView) => {
+    if (next === 'settings') {
+      setSettingsOpen(true)
+      return
+    }
+    setView(next)
+  }, [])
+
+  const lastSyncLabel = useMemo(() => formatLastSync(lastSync), [lastSync])
 
   if (showSplash) {
     return <SplashScreen dataReady={dataReady} onFinished={handleSplashFinished} />
@@ -185,31 +236,140 @@ export default function App() {
     return <Onboarding onComplete={handleOnboardingComplete} />
   }
 
+  // Map sidebar view → content props
+  const filter: 'all' | 'installed' | 'updates' =
+    view === 'installed' ? 'installed' : view === 'updates' ? 'updates' : 'all'
+
+  const topbarTitle = topbarTitleFor(view)
+  const topbarMeta = topbarMetaFor(view, counts)
+
+  const showHub = view === 'plugins' || view === 'installed' || view === 'updates'
+  const showBeta = view === 'beta'
+  const showHelp = view === 'help'
+
   return (
-    <div className="flex flex-col h-screen overflow-hidden">
-      {/* Tab navigation */}
-      <div className="flex items-center gap-0 bg-[#08080c] border-b border-white/[0.06] px-4 flex-shrink-0" data-tauri-drag-region>
-        <button
-          onClick={() => setActiveTab('hub')}
-          className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium transition-all relative ${
-            activeTab === 'hub'
-              ? 'text-white'
-              : 'text-zinc-500 hover:text-zinc-300'
-          }`}
-        >
-          <Package size={13} />
-          Hub
-          {activeTab === 'hub' && (
-            <div className="absolute bottom-0 left-2 right-2 h-[2px] bg-red-500 rounded-full" />
-          )}
-        </button>
-        {/* Collabs and AutoMix hidden until ready */}
+    <div className="app-shell">
+      {/* Tauri title bar (drag region) */}
+      <div className="titlebar" data-tauri-drag-region>
+        <div className="tb-dots">
+          <span className="tb-dot r" />
+          <span className="tb-dot y" />
+          <span className="tb-dot g" />
+        </div>
+        <div className="tb-title">Hardwave Suite</div>
+        <div className="tb-version">{appVersion ? `v${appVersion}` : ''}</div>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-hidden flex flex-col">
-        <HubView user={user} onLogout={handleLogout} preloadedProducts={preloadedProducts} preloadedVersions={preloadedVersions} />
+      <div className="shell">
+        <Sidebar
+          active={view}
+          onSelect={handleSidebarSelect}
+          updateCount={counts.updates}
+          betaCount={counts.beta}
+          user={user}
+          onAccountClick={() => setSettingsOpen(true)}
+        />
+
+        <main className="main">
+          <div className="topbar">
+            <div className="topbar-title">{topbarTitle}</div>
+            <div className="topbar-meta">{topbarMeta}</div>
+            <div className="search">
+              <Search size={13} />
+              <input
+                placeholder="Search plug-ins…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              <span className="kbd">⌘K</span>
+            </div>
+            <button
+              className="btn"
+              onClick={handleLogout}
+              type="button"
+              title={`Sign out (${user.email})`}
+            >
+              <LogOut size={13} />
+              Sign out
+            </button>
+          </div>
+
+          {showHub && (
+            <div className="content">
+              <HubView
+                preloadedProducts={preloadedProducts}
+                preloadedVersions={preloadedVersions}
+                filter={filter}
+                search={search}
+                onCountsChange={setCounts}
+                onLastSyncChange={setLastSync}
+              />
+            </div>
+          )}
+
+          {showBeta && (
+            <div className="content">
+              <div className="hub-h">
+                <div>
+                  <h1>Beta builds</h1>
+                  <p className="lede">Time-limited cutting-edge builds for subscribers.</p>
+                </div>
+              </div>
+              <BetaBuildsSection
+                channel={updateChannel}
+                subscription={subscription}
+                onSubscribe={handleSubscribe}
+              />
+            </div>
+          )}
+
+          {showHelp && (
+            <div className="content">
+              <div className="help-panel">
+                <h2>Help &amp; bugs</h2>
+                <p>
+                  Need a hand? The fastest paths:
+                </p>
+                <p>
+                  <a href="https://hardwavestudios.com/support" target="_blank" rel="noreferrer">
+                    Open the support hub
+                  </a>{' '}
+                  for guides, FAQs and contact options.
+                </p>
+                <p>
+                  Found a bug? Send a crash report from the plug-in window if you have one — otherwise email{' '}
+                  <a href="mailto:support@hardwavestudios.com">support@hardwavestudios.com</a> with the build version
+                  and steps to reproduce.
+                </p>
+                <p>
+                  Pre-release testers: report beta issues in the Discord <strong>#beta-testers</strong> channel.
+                </p>
+              </div>
+            </div>
+          )}
+
+          <div className="statusbar">
+            <span className="pip" />
+            <span>CONNECTED</span>
+            <span className="sb-sep">·</span>
+            <span>
+              {counts.installed} installed · {counts.updates} update{counts.updates === 1 ? '' : 's'} · {counts.beta} in beta
+            </span>
+            <span className="sb-tail">
+              {appVersion ? `v${appVersion}` : ''}
+              {lastSyncLabel && ` — last sync ${lastSyncLabel}`}
+            </span>
+          </div>
+        </main>
       </div>
+
+      <SettingsPanel
+        open={settingsOpen}
+        onClose={() => {
+          setSettingsOpen(false)
+          loadChannelAndSubscription()
+        }}
+      />
 
       {crashReport && (
         <CrashReportModal report={crashReport} onDone={() => setCrashReport(null)} />
@@ -230,4 +390,40 @@ export default function App() {
       )}
     </div>
   )
+}
+
+function topbarTitleFor(view: SidebarView): string {
+  switch (view) {
+    case 'installed':
+      return 'Installed'
+    case 'updates':
+      return 'Updates'
+    case 'beta':
+      return 'Beta builds'
+    case 'help':
+      return 'Help & bugs'
+    case 'settings':
+      return 'Settings'
+    default:
+      return 'Plug-ins'
+  }
+}
+
+function topbarMetaFor(view: SidebarView, c: HubCounts): string {
+  if (view === 'beta') return `${c.beta} in beta`
+  if (view === 'installed') return `${c.installed} installed`
+  if (view === 'updates') return `${c.updates} update${c.updates === 1 ? '' : 's'} available`
+  return `${c.total} in catalogue · ${c.installed} installed · ${c.updates} update${c.updates === 1 ? '' : 's'} · ${c.beta} in beta`
+}
+
+function formatLastSync(date: Date | null): string {
+  if (!date) return ''
+  const diffSec = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000))
+  if (diffSec < 5) return 'just now'
+  if (diffSec < 60) return `${diffSec}s ago`
+  const min = Math.round(diffSec / 60)
+  if (min < 60) return `${min} min${min === 1 ? '' : 's'} ago`
+  const hr = Math.round(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  return date.toLocaleString()
 }

@@ -1,18 +1,37 @@
-import { useEffect, useLayoutEffect, useReducer, useCallback, useState, useRef } from 'react'
-import { Download, Package, FolderOpen, CheckCircle, Loader2, AlertCircle, LogOut, RefreshCw, ArrowUpCircle, Trash2, Settings, Music } from 'lucide-react'
-import { SettingsPanel } from '../components/SettingsPanel'
-import { BetaBuildsSection } from '../components/BetaBuildsSection'
-import { HwLogo } from '../components/HwLogo'
-import { getVersion } from '@tauri-apps/api/app'
-import anime from 'animejs'
+import { useEffect, useReducer, useCallback, useState, useMemo } from 'react'
+import {
+  Activity,
+  Zap,
+  Droplet,
+  CircleDot,
+  TrendingUp,
+  ChevronsLeftRight,
+  Music,
+  Package,
+  FolderOpen,
+  Download,
+  Check,
+  RefreshCw,
+  AlertCircle,
+} from 'lucide-react'
 import * as api from '../lib/api'
-import type { Product, SubscriptionInfo, UpdateChannel } from '../lib/api'
+import type { Product } from '../lib/api'
+import { isBetaProduct } from '../lib/beta'
 
 interface HubViewProps {
-  user: api.User
-  onLogout: () => void
   preloadedProducts?: Product[] | null
   preloadedVersions?: Record<string, string> | null
+  filter?: 'all' | 'installed' | 'updates'
+  search?: string
+  onCountsChange?: (counts: HubCounts) => void
+  onLastSyncChange?: (lastSync: Date | null) => void
+}
+
+export interface HubCounts {
+  total: number
+  installed: number
+  updates: number
+  beta: number
 }
 
 interface DlState {
@@ -28,6 +47,7 @@ type DlAction =
   | { type: 'start'; fileId: string }
   | { type: 'progress'; fileId: string; percent: number; status: DlState['status']; installPath?: string }
   | { type: 'error'; fileId: string; error: string }
+  | { type: 'reset'; fileId: string }
 
 function dlReducer(state: DlMap, action: DlAction): DlMap {
   switch (action.type) {
@@ -37,6 +57,11 @@ function dlReducer(state: DlMap, action: DlAction): DlMap {
       return { ...state, [action.fileId]: { percent: action.percent, status: action.status, installPath: action.installPath } }
     case 'error':
       return { ...state, [action.fileId]: { percent: 0, status: 'error', error: action.error } }
+    case 'reset': {
+      const next = { ...state }
+      delete next[action.fileId]
+      return next
+    }
     default:
       return state
   }
@@ -51,118 +76,91 @@ function detectPlatform(): 'windows' | 'mac' | 'linux' {
 
 const platformLabels: Record<string, string> = { windows: 'Windows', mac: 'macOS', linux: 'Linux' }
 
-export function HubView({ user, onLogout, preloadedProducts, preloadedVersions }: HubViewProps) {
+/**
+ * Pick a representative icon for a plug-in based on its slug.
+ * Falls back to a generic Package mark for sample packs / unknown.
+ */
+function iconForSlug(slug: string, isSample: boolean) {
+  if (isSample) return Music
+  switch (slug) {
+    case 'analyser':
+    case 'hardwave-analyser':
+      return Activity
+    case 'loudlab':
+      return Zap
+    case 'wettboi':
+      return Droplet
+    case 'kickforge':
+      return CircleDot
+    case 'pumpcontrol':
+      return TrendingUp
+    case 'wideboi':
+      return ChevronsLeftRight
+    default:
+      return Package
+  }
+}
+
+/**
+ * Render a plug-in name with the suffix coloured to match the mockup —
+ * brand-red for released stable plug-ins, accent-violet for beta.
+ */
+function renderProductName(p: Product, beta: boolean) {
+  const prefix = 'Hardwave '
+  if (!p.name.startsWith(prefix)) {
+    return <span>{p.name}</span>
+  }
+  const suffix = p.name.slice(prefix.length)
+  return (
+    <>
+      Hardwave <span className={beta ? 'accent-violet' : 'accent-brand'}>{suffix}</span>
+    </>
+  )
+}
+
+function categoryLabel(p: Product): string {
+  if (p.category === 'sample' || p.category === 'preset') return 'Sample pack'
+  // Lightweight friendly mapping based on slug — keeps UI readable.
+  switch (p.slug) {
+    case 'analyser':
+    case 'hardwave-analyser':
+      return 'Spectrum analyser'
+    case 'loudlab':
+      return 'Limiter / loudness'
+    case 'wettboi':
+      return 'Reverb'
+    case 'kickforge':
+      return 'Kick synth'
+    case 'pumpcontrol':
+      return 'Sidechain'
+    case 'wideboi':
+      return 'Stereo width'
+    default:
+      return p.category ? p.category.toUpperCase() : 'Plug-in'
+  }
+}
+
+function formatLabel(p: Product): string {
+  if (p.category === 'sample' || p.category === 'preset') return 'Sample pack'
+  const fmts = (p.formats && p.formats.length ? p.formats : ['VST3', 'CLAP']).join(' · ')
+  return fmts
+}
+
+export function HubView({
+  preloadedProducts,
+  preloadedVersions,
+  filter = 'all',
+  search = '',
+  onCountsChange,
+  onLastSyncChange,
+}: HubViewProps) {
   const hasPreloaded = !!(preloadedProducts && preloadedProducts.length >= 0)
-  const [products, setProducts] = useReducer((_: Product[], v: Product[]) => v, preloadedProducts ?? [])
-  const [loading, setLoading] = useReducer((_: boolean, v: boolean) => v, !hasPreloaded)
-  const [fetchError, setFetchError] = useReducer((_: string | null, v: string | null) => v, null)
-  const [appVersion, setAppVersion] = useReducer((_: string, v: string) => v, '')
+  const [products, setProducts] = useState<Product[]>(preloadedProducts ?? [])
+  const [loading, setLoading] = useState<boolean>(!hasPreloaded)
+  const [fetchError, setFetchError] = useState<string | null>(null)
   const [downloads, dispatch] = useReducer(dlReducer, {})
   const [installedVersions, setInstalledVersions] = useState<Record<string, string>>(preloadedVersions ?? {})
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const [updateChannel, setUpdateChannel] = useState<UpdateChannel>('stable')
-  const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null)
-
-  const headerRef = useRef<HTMLElement>(null)
-  const greetingRef = useRef<HTMLDivElement>(null)
-  const cardsRef = useRef<HTMLDivElement>(null)
-  const glow1Ref = useRef<HTMLDivElement>(null)
-  const glow2Ref = useRef<HTMLDivElement>(null)
-  const animatedRef = useRef(false)
-
-  useEffect(() => {
-    getVersion().then(setAppVersion).catch(() => {})
-  }, [])
-
-  const loadChannelAndSubscription = useCallback(async () => {
-    try {
-      const [ch, sub] = await Promise.all([
-        api.getUpdateChannel().catch(() => 'stable' as UpdateChannel),
-        api.getSubscriptionInfo().catch(() => null),
-      ])
-      setUpdateChannel(ch)
-      setSubscription(sub)
-    } catch {
-      /* non-blocking */
-    }
-  }, [])
-
-  useEffect(() => { loadChannelAndSubscription() }, [loadChannelAndSubscription])
-
-  const handleSubscribe = useCallback(async () => {
-    try {
-      await api.openExternalUrl('https://hardwavestudios.com/pricing')
-    } catch {
-      window.open('https://hardwavestudios.com/pricing', '_blank')
-    }
-  }, [])
-
-  // Entrance animations
-  useEffect(() => {
-    const tl = anime.timeline({ easing: 'easeOutCubic' })
-
-    // Background glows fade in smoothly
-    tl.add({
-      targets: [glow1Ref.current, glow2Ref.current],
-      opacity: [0, 1],
-      duration: 1200,
-      easing: 'easeOutQuad',
-    }, 0)
-
-    // Glow breathing — slow, subtle drift
-    anime({
-      targets: glow1Ref.current,
-      translateX: [0, 20, 0],
-      translateY: [0, -15, 0],
-      scale: [1, 1.05, 1],
-      duration: 10000,
-      easing: 'easeInOutSine',
-      loop: true,
-    })
-    anime({
-      targets: glow2Ref.current,
-      translateX: [0, -15, 0],
-      translateY: [0, 10, 0],
-      scale: [1, 1.08, 1],
-      duration: 12000,
-      easing: 'easeInOutSine',
-      loop: true,
-    })
-
-    // Header slides down with gentle deceleration
-    tl.add({
-      targets: headerRef.current,
-      translateY: [-30, 0],
-      opacity: [0, 1],
-      duration: 600,
-      easing: 'easeOutCubic',
-    }, 50)
-
-    // Greeting fades up (not sideways — cleaner)
-    tl.add({
-      targets: greetingRef.current,
-      translateY: [20, 0],
-      opacity: [0, 1],
-      filter: ['blur(4px)', 'blur(0px)'],
-      duration: 500,
-      easing: 'easeOutCubic',
-    }, 250)
-  }, [])
-
-  // Stagger product cards when they load
-  useEffect(() => {
-    if (!loading && products.length > 0 && cardsRef.current && !animatedRef.current) {
-      animatedRef.current = true
-      anime({
-        targets: cardsRef.current.children,
-        translateY: [30, 0],
-        opacity: [0, 1],
-        duration: 500,
-        delay: anime.stagger(80, { start: 200 }),
-        easing: 'easeOutCubic',
-      })
-    }
-  }, [loading, products])
+  const [lastSync, setLastSync] = useState<Date | null>(hasPreloaded ? new Date() : null)
 
   const loadProducts = useCallback(async () => {
     setLoading(true)
@@ -174,14 +172,33 @@ export function HubView({ user, onLogout, preloadedProducts, preloadedVersions }
       ])
       setProducts(prods)
       setInstalledVersions(installed)
+      const now = new Date()
+      setLastSync(now)
+      onLastSyncChange?.(now)
     } catch (err) {
-      setFetchError(typeof err === 'string' ? err : (err instanceof Error ? err.message : 'Failed to load purchases'))
+      setFetchError(typeof err === 'string' ? err : err instanceof Error ? err.message : 'Failed to load purchases')
     } finally {
       setLoading(false)
     }
+  }, [onLastSyncChange])
+
+  useEffect(() => {
+    if (!hasPreloaded) loadProducts()
+    else if (lastSync) onLastSyncChange?.(lastSync)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useEffect(() => { if (!hasPreloaded) loadProducts() }, [loadProducts, hasPreloaded])
+  const counts = useMemo<HubCounts>(() => {
+    const installed = products.filter((p) => !!installedVersions[p.slug]).length
+    const updates = products.filter((p) => {
+      const v = installedVersions[p.slug]
+      return v && v !== p.version
+    }).length
+    const beta = products.filter(isBetaProduct).length
+    return { total: products.length, installed, updates, beta }
+  }, [products, installedVersions])
+
+  useEffect(() => { onCountsChange?.(counts) }, [counts, onCountsChange])
 
   const handleDownload = useCallback(async (product: Product, platform: string, url: string) => {
     const fileId = `${product.id}-${platform}`
@@ -194,11 +211,11 @@ export function HubView({ user, onLogout, preloadedProducts, preloadedVersions }
     })
     try {
       await api.downloadAndInstall(fileId, url, filename, product.category || 'vst', product.name, product.slug, product.version)
-      setInstalledVersions(prev => ({ ...prev, [product.slug]: product.version }))
+      setInstalledVersions((prev) => ({ ...prev, [product.slug]: product.version }))
     } catch (err) {
       const msg = String(err)
       if (msg.includes('os error 32') || msg.includes('being used by another process')) {
-        dispatch({ type: 'error', fileId, error: 'Plugin is in use. Close your DAW (e.g. FL Studio) and try again.' })
+        dispatch({ type: 'error', fileId, error: 'Plug-in is in use. Close your DAW (e.g. FL Studio) and try again.' })
       } else {
         dispatch({ type: 'error', fileId, error: msg })
       }
@@ -207,469 +224,306 @@ export function HubView({ user, onLogout, preloadedProducts, preloadedVersions }
     }
   }, [])
 
-  const handleUninstall = useCallback(async (product: Product) => {
-    try {
-      await api.uninstallPlugin(product.slug, product.category || 'vst')
-      setInstalledVersions(prev => {
-        const next = { ...prev }
-        delete next[product.slug]
-        return next
+  // Filter + search logic
+  const filtered = useMemo(() => {
+    let list = products
+    if (filter === 'installed') {
+      list = list.filter((p) => !!installedVersions[p.slug])
+    } else if (filter === 'updates') {
+      list = list.filter((p) => {
+        const v = installedVersions[p.slug]
+        return v && v !== p.version
       })
-      const fileId = `${product.id}-${detectPlatform()}`
-      dispatch({ type: 'progress', fileId, percent: 0, status: 'idle' })
-    } catch (err) {
-      const fileId = `${product.id}-${detectPlatform()}`
-      dispatch({ type: 'error', fileId, error: String(err) })
     }
-  }, [])
+    const q = search.trim().toLowerCase()
+    if (q) {
+      list = list.filter((p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.slug.toLowerCase().includes(q) ||
+        (p.description || '').toLowerCase().includes(q),
+      )
+    }
+    return list
+  }, [products, installedVersions, filter, search])
 
-  const displayName = user.displayName || user.email.split('@')[0]
+  const updatableProducts = useMemo(
+    () => products.filter((p) => {
+      const v = installedVersions[p.slug]
+      return v && v !== p.version
+    }),
+    [products, installedVersions],
+  )
+
+  const handleUpdateAll = useCallback(async () => {
+    const platform = detectPlatform()
+    for (const p of updatableProducts) {
+      const url = p.downloads[platform]
+      if (url) {
+        // Sequential to avoid hammering disk; each download tracked independently.
+        // eslint-disable-next-line no-await-in-loop
+        await handleDownload(p, platform, url)
+      }
+    }
+  }, [updatableProducts, handleDownload])
+
+  // Loading / error short-circuits
+  if (loading) {
+    return (
+      <div className="loading-state">
+        <p>Loading your library&hellip;</p>
+      </div>
+    )
+  }
+  if (fetchError) {
+    return (
+      <div className="error-state">
+        <AlertCircle size={28} color="var(--brand-hover)" />
+        <h3>Couldn&rsquo;t load your library</h3>
+        <p>{fetchError}</p>
+        <button className="btn" onClick={loadProducts} type="button">
+          <RefreshCw size={13} /> Retry
+        </button>
+      </div>
+    )
+  }
+
+  // Filtered-empty states get dedicated copy so the page isn't blank.
+  const emptyByFilter = filtered.length === 0 && products.length > 0
 
   return (
-    <div className="flex flex-col flex-1 overflow-hidden bg-[#08080c] relative">
-      {/* Background ambient glow */}
-      <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        <div ref={glow1Ref} className="absolute -top-32 -right-32 w-[500px] h-[500px] bg-red-600/[0.03] rounded-full blur-[120px] opacity-0" />
-        <div ref={glow2Ref} className="absolute -bottom-32 -left-32 w-[400px] h-[400px] bg-red-600/[0.03] rounded-full blur-[120px] opacity-0" />
-      </div>
-
-      {/* Header */}
-      <header ref={headerRef} className="relative flex items-center gap-3 px-5 h-14 bg-white/[0.02] border-b border-white/[0.06] flex-shrink-0 drag backdrop-blur-md opacity-0">
-        <div className="flex items-center gap-2.5 no-drag">
-          <HwLogo size={32} />
-          <div>
-            <span className="text-sm font-semibold text-white">Hardwave Suite</span>
-            {appVersion && <span className="ml-1.5 text-[10px] text-zinc-600 font-mono">v{appVersion}</span>}
-          </div>
+    <>
+      <div className="hub-h">
+        <div>
+          <h1>{filterTitle(filter)}</h1>
+          <p className="lede">{filterLede(filter)}</p>
         </div>
-        <div className="flex-1" />
-        <div className="flex items-center gap-3 no-drag">
-          <span className="text-xs text-zinc-500 hidden sm:block">{user.email}</span>
-          <button
-            onClick={() => setSettingsOpen(true)}
-            className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-zinc-400 hover:text-white transition-all"
-            title="Settings"
-          >
-            <Settings className="w-3.5 h-3.5" />
+        <div className="right">
+          <button className="btn" onClick={loadProducts} type="button">
+            <RefreshCw size={13} />
+            Refresh
           </button>
-          <button
-            onClick={onLogout}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-zinc-400 hover:text-white text-xs transition-all"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            Sign out
-          </button>
-        </div>
-      </header>
-
-      <SettingsPanel
-        open={settingsOpen}
-        onClose={() => {
-          setSettingsOpen(false)
-          loadChannelAndSubscription()
-        }}
-      />
-
-      {/* Content */}
-      <main className="relative flex-1 overflow-y-auto">
-        <div className="max-w-4xl mx-auto px-6 py-8">
-          {/* Greeting */}
-          <div ref={greetingRef} className="mb-8 opacity-0">
-            <h1 className="text-2xl font-bold text-white">
-              Hey, <span className="text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-red-400">{displayName}</span>
-            </h1>
-            <p className="text-sm text-zinc-500 mt-1">Your products are ready to download and install.</p>
-          </div>
-
-          {loading ? (
-            <LoadingState />
-          ) : fetchError ? (
-            <ErrorState error={fetchError} onRetry={loadProducts} />
-          ) : products.length === 0 ? (
-            <EmptyState />
-          ) : (
-            <div ref={cardsRef} className="space-y-4">
-              {products.map((product) => (
-                <ProductCard
-                  key={product.id}
-                  product={product}
-                  downloads={downloads}
-                  installedVersion={installedVersions[product.slug] ?? null}
-                  onDownload={(platform, url) => handleDownload(product, platform, url)}
-                  onOpenFolder={() => api.openInstallFolder(product.category || 'vst')}
-                  onUninstall={() => handleUninstall(product)}
-                />
-              ))}
-            </div>
+          {filter !== 'installed' && (
+            <button
+              className="btn btn-primary"
+              onClick={handleUpdateAll}
+              disabled={updatableProducts.length === 0}
+              type="button"
+            >
+              <Download size={13} />
+              Update all
+            </button>
           )}
-
-          <BetaBuildsSection
-            channel={updateChannel}
-            subscription={subscription}
-            onSubscribe={handleSubscribe}
-          />
         </div>
-      </main>
-    </div>
-  )
-}
-
-function LoadingState() {
-  const ref = useRef<HTMLDivElement>(null)
-  const dotsRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    anime({
-      targets: ref.current,
-      opacity: [0, 1],
-      translateY: [20, 0],
-      duration: 500,
-      easing: 'easeOutCubic',
-    })
-    if (dotsRef.current) {
-      anime({
-        targets: dotsRef.current.children,
-        scale: [0.5, 1.2, 0.5],
-        opacity: [0.3, 1, 0.3],
-        duration: 1200,
-        delay: anime.stagger(200),
-        loop: true,
-        easing: 'easeInOutSine',
-      })
-    }
-  }, [])
-
-  return (
-    <div ref={ref} className="flex flex-col items-center gap-4 py-16 opacity-0">
-      <div ref={dotsRef} className="flex gap-2">
-        <div className="w-2.5 h-2.5 rounded-full bg-red-600" />
-        <div className="w-2.5 h-2.5 rounded-full bg-red-600" />
-        <div className="w-2.5 h-2.5 rounded-full bg-violet-500" />
       </div>
-      <span className="text-sm text-zinc-500">Loading your library...</span>
-    </div>
+
+      {filter !== 'installed' && updatableProducts.length > 0 && (
+        <div className="update-banner">
+          <Download className="update-banner-icon" size={18} />
+          <div className="update-banner-body">
+            <strong>{updatableProducts.length} update{updatableProducts.length === 1 ? '' : 's'} available.</strong>{' '}
+            {updatableProducts.length === 1
+              ? `${updatableProducts[0].name} v${updatableProducts[0].version} is ready to install.`
+              : 'Pull the latest builds for everything you have installed.'}
+          </div>
+          <button className="update-banner-btn" onClick={handleUpdateAll} type="button">
+            {updatableProducts.length === 1 ? 'Install' : 'Update all'}
+          </button>
+        </div>
+      )}
+
+      {products.length === 0 ? (
+        <div className="empty-state">
+          <Package size={28} color="var(--text-dim)" />
+          <h3>No purchases yet</h3>
+          <p>
+            Your purchased Hardwave plug-ins and sample packs will appear here.{' '}
+            <a href="https://hardwavestudios.com" target="_blank" rel="noreferrer" style={{ color: 'var(--brand-hover)' }}>
+              Browse the store.
+            </a>
+          </p>
+        </div>
+      ) : emptyByFilter ? (
+        <div className="empty-state">
+          <Package size={28} color="var(--text-dim)" />
+          <h3>Nothing here yet</h3>
+          <p>{filterEmptyCopy(filter, search)}</p>
+        </div>
+      ) : (
+        <div className="cards">
+          {filtered.map((product) => (
+            <ProductCard
+              key={product.id}
+              product={product}
+              downloads={downloads}
+              installedVersion={installedVersions[product.slug] ?? null}
+              onDownload={handleDownload}
+              onOpenFolder={() => api.openInstallFolder(product.category || 'vst')}
+            />
+          ))}
+        </div>
+      )}
+    </>
   )
 }
 
-function ErrorState({ error, onRetry }: { error: string; onRetry: () => void }) {
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    anime({
-      targets: ref.current,
-      opacity: [0, 1],
-      scale: [0.9, 1],
-      duration: 500,
-      easing: 'easeOutCubic',
-    })
-  }, [])
-
-  return (
-    <div ref={ref} className="flex flex-col items-center gap-4 py-16 text-center opacity-0">
-      <div className="w-12 h-12 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center">
-        <AlertCircle className="w-5 h-5 text-red-400" />
-      </div>
-      <p className="text-sm text-zinc-400">{error}</p>
-      <button onClick={onRetry} className="flex items-center gap-1.5 px-4 py-2 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-zinc-300 text-sm rounded-lg transition-colors">
-        <RefreshCw className="w-3.5 h-3.5" />Retry
-      </button>
-    </div>
-  )
+function filterTitle(f: 'all' | 'installed' | 'updates'): string {
+  switch (f) {
+    case 'installed':
+      return 'Installed'
+    case 'updates':
+      return 'Updates'
+    default:
+      return 'Library'
+  }
 }
 
-function ProductCard({ product, downloads, installedVersion, onDownload, onOpenFolder, onUninstall }: {
-  product: Product; downloads: DlMap; installedVersion: string | null
-  onDownload: (platform: string, url: string) => void; onOpenFolder: () => void; onUninstall: () => void
-}) {
+function filterLede(f: 'all' | 'installed' | 'updates'): string {
+  switch (f) {
+    case 'installed':
+      return 'Plug-ins currently installed on this machine.'
+    case 'updates':
+      return 'New builds for plug-ins you already have installed.'
+    default:
+      return 'Every Hardwave plug-in. Installed locally where they belong.'
+  }
+}
+
+function filterEmptyCopy(f: 'all' | 'installed' | 'updates', search: string): string {
+  if (search) return `No plug-ins match “${search}”.`
+  if (f === 'installed') return 'You haven’t installed any plug-ins yet. Switch to Plug-ins to grab one.'
+  if (f === 'updates') return 'You’re fully up to date. Nothing to install.'
+  return 'No plug-ins to show.'
+}
+
+interface ProductCardProps {
+  product: Product
+  downloads: DlMap
+  installedVersion: string | null
+  onDownload: (product: Product, platform: string, url: string) => void
+  onOpenFolder: () => void
+}
+
+function ProductCard({ product, downloads, installedVersion, onDownload, onOpenFolder }: ProductCardProps) {
+  const platform = detectPlatform()
   const isSample = product.category === 'sample' || product.category === 'preset'
-  const currentPlatform = detectPlatform()
   const platformUrl = isSample
-    ? (product.downloads[currentPlatform] || product.downloads.windows || product.downloads.mac || product.downloads.linux)
-    : product.downloads[currentPlatform]
-  const fileId = `${product.id}-${currentPlatform}`
-  const dlState = downloads[fileId]
-  const status = dlState?.status ?? 'idle'
+    ? (product.downloads[platform] || product.downloads.windows || product.downloads.mac || product.downloads.linux)
+    : product.downloads[platform]
+  const fileId = `${product.id}-${platform}`
+  const dl = downloads[fileId]
+  const status = dl?.status ?? 'idle'
   const inProgress = status === 'downloading' || status === 'installing'
   const sessionInstalled = status === 'installed'
   const isInstalled = !!installedVersion || sessionInstalled
-  const hasUpdate = installedVersion ? installedVersion !== product.version : false
-  const showInstalled = sessionInstalled || (isInstalled && !hasUpdate && status === 'idle')
+  const hasUpdate = !!installedVersion && installedVersion !== product.version
+  const beta = isBetaProduct(product)
 
-  const cardRef = useRef<HTMLDivElement>(null)
-  const iconRef = useRef<HTMLDivElement>(null)
-  const installedRef = useRef<HTMLDivElement>(null)
-  const prevStatus = useRef(status)
-  const justInstalled = useRef(false)
+  const Icon = iconForSlug(product.slug, isSample)
 
-  // Track if we just transitioned to installed (before paint)
-  useLayoutEffect(() => {
-    if (prevStatus.current !== status) {
-      if (status === 'installed') {
-        justInstalled.current = true
-        // Hide the installed UI before browser paints
-        if (installedRef.current) {
-          installedRef.current.style.opacity = '0'
-        }
-      }
-    }
-  }, [status])
-
-  // Run animations after paint
-  useEffect(() => {
-    if (prevStatus.current !== status) {
-      if (status === 'installed' && cardRef.current) {
-        const tl = anime.timeline({ easing: 'easeOutCubic' })
-
-        // Gentle green glow on card
-        tl.add({
-          targets: cardRef.current,
-          borderColor: ['rgba(255,255,255,0.06)', 'rgba(16,185,129,0.3)', 'rgba(16,185,129,0.12)'],
-          boxShadow: ['0 0 0px rgba(16,185,129,0)', '0 0 20px rgba(16,185,129,0.1)', '0 0 0px rgba(16,185,129,0)'],
-          duration: 1500,
-          easing: 'easeOutQuad',
-        }, 0)
-
-        // Entire installed row fades in
-        if (installedRef.current) {
-          tl.add({
-            targets: installedRef.current,
-            opacity: [0, 1],
-            translateY: [8, 0],
-            duration: 400,
-            easing: 'easeOutCubic',
-          }, 100)
-        }
-
-        // Stop icon pulse
-        if (iconRef.current) {
-          anime.remove(iconRef.current)
-          anime({
-            targets: iconRef.current,
-            scale: 1,
-            duration: 300,
-            easing: 'easeOutCubic',
-          })
-        }
-
-        justInstalled.current = false
-      }
-      if (status === 'error' && cardRef.current) {
-        anime({
-          targets: cardRef.current,
-          translateX: [0, -8, 8, -6, 6, -3, 3, 0],
-          duration: 500,
-          easing: 'easeInOutQuad',
-        })
-        if (iconRef.current) {
-          anime.remove(iconRef.current)
-          anime({
-            targets: iconRef.current,
-            scale: 1,
-            duration: 300,
-            easing: 'easeOutCubic',
-          })
-        }
-      }
-      if (status === 'downloading' && iconRef.current) {
-        anime({
-          targets: iconRef.current,
-          scale: [1, 1.08, 1],
-          duration: 1200,
-          easing: 'easeInOutSine',
-          loop: true,
-        })
-      }
-      prevStatus.current = status
-    }
-  }, [status])
-
-  // Hover interaction — subtle lift
-  const handleMouseEnter = () => {
-    if (cardRef.current && !inProgress) {
-      anime({
-        targets: cardRef.current,
-        translateY: -1,
-        duration: 250,
-        easing: 'easeOutCubic',
-      })
-    }
-    if (iconRef.current && !inProgress) {
-      anime({
-        targets: iconRef.current,
-        scale: 1.05,
-        rotate: '3deg',
-        duration: 250,
-        easing: 'easeOutCubic',
-      })
-    }
-  }
-  const handleMouseLeave = () => {
-    if (cardRef.current && !inProgress) {
-      anime({
-        targets: cardRef.current,
-        translateY: 0,
-        duration: 250,
-        easing: 'easeOutCubic',
-      })
-    }
-    if (iconRef.current && !inProgress) {
-      anime.remove(iconRef.current)
-      anime({
-        targets: iconRef.current,
-        scale: 1,
-        rotate: '0deg',
-        duration: 250,
-        easing: 'easeOutCubic',
-      })
-    }
+  // Corner pill: UPDATE | INSTALLED | BETA | AVAILABLE
+  let cornerLabel: string
+  let cornerClass: string
+  if (hasUpdate) {
+    cornerLabel = 'UPDATE'
+    cornerClass = 'update'
+  } else if (isInstalled) {
+    cornerLabel = 'INSTALLED'
+    cornerClass = 'installed'
+  } else if (beta) {
+    cornerLabel = 'BETA'
+    cornerClass = 'beta'
+  } else {
+    cornerLabel = 'AVAILABLE'
+    cornerClass = 'notinstalled'
   }
 
-  return (
-    <div
-      ref={cardRef}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
-      className="bg-white/[0.03] rounded-2xl border border-white/[0.06] transition-colors overflow-hidden backdrop-blur-sm opacity-0"
-    >
-      <div className="p-5">
-        {/* Product header */}
-        <div className="flex items-start gap-4">
-          <div ref={iconRef} className={`w-12 h-12 rounded-xl bg-gradient-to-br ${isSample ? 'from-violet-500/20 to-blue-500/10 border-violet-500/20' : 'from-red-600/20 to-red-500/10 border-red-600/20'} border flex items-center justify-center flex-shrink-0`}>
-            {isSample ? <Music className="w-5 h-5 text-violet-400" /> : <Package className="w-5 h-5 text-red-400" />}
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex flex-wrap items-center gap-2 mb-0.5">
-              <h3 className="text-sm font-semibold text-white">{product.name}</h3>
-              {isSample ? (
-                <span className="text-[10px] font-medium border rounded-full px-2 py-0.5 text-violet-400 bg-violet-500/10 border-violet-500/20">Sample Pack</span>
-              ) : (
-                (product.formats?.length ? product.formats : ['VST3']).map((fmt) => (
-                  <span key={fmt} className="text-[10px] font-medium border rounded-full px-2 py-0.5 text-red-400 bg-red-500/10 border-red-500/20">{fmt}</span>
-                ))
-              )}
-            </div>
-            <div className="text-[11px] text-zinc-600 font-mono mb-1">
-              {hasUpdate ? (
-                <><span className="text-zinc-500">v{installedVersion}</span> <span className="text-red-400">&rarr; v{product.version}</span></>
-              ) : (
-                <>v{product.version}</>
-              )}
-              {!isSample && <span className="ml-2 text-zinc-600">{platformLabels[currentPlatform]}</span>}
-            </div>
-            <p className="text-xs text-zinc-500 leading-relaxed line-clamp-2">{product.description}</p>
-          </div>
-        </div>
-
-        {/* Error banner */}
-        {status === 'error' && (
-          <div className="flex items-center gap-2 px-3 py-2.5 mt-4 rounded-xl bg-red-500/[0.08] border border-red-500/20">
-            <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
-            <span className="text-xs text-red-300">{dlState?.error || 'Installation failed'}</span>
-          </div>
-        )}
-
-        {/* Action area */}
-        {platformUrl ? (
-          <div className="mt-4 flex items-center gap-3">
-            {inProgress ? (
-              <div className="flex items-center gap-3 flex-1">
-                <div className="flex-1 h-2 bg-white/[0.06] rounded-full overflow-hidden">
-                  <div className="h-full bg-gradient-to-r from-red-700 to-red-500 rounded-full transition-all duration-200" style={{ width: `${dlState?.percent ?? 0}%` }} />
-                </div>
-                <span className="text-xs text-zinc-400 font-mono w-8 text-right">{dlState?.percent ?? 0}%</span>
-                <span className="text-xs text-red-400">{status === 'installing' ? 'Installing...' : 'Downloading...'}</span>
-                <Loader2 className="w-4 h-4 text-red-400 animate-spin flex-shrink-0" />
-              </div>
-            ) : showInstalled ? (
-              <div ref={installedRef} className="flex items-center gap-3 flex-1">
-                <div className="flex items-center gap-2 flex-1">
-                  <CheckCircle className="w-4 h-4 text-emerald-400" />
-                  <span className="text-sm text-emerald-400 font-medium">Installed</span>
-                </div>
-                <button onClick={onUninstall} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/[0.04] hover:bg-red-500/10 border border-white/[0.06] hover:border-red-500/20 text-xs text-zinc-400 hover:text-red-400 transition-all">
-                  <Trash2 className="w-3.5 h-3.5" />Uninstall
-                </button>
-                <button onClick={onOpenFolder} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-xs text-zinc-400 hover:text-white transition-all">
-                  <FolderOpen className="w-3.5 h-3.5" />Open Folder
-                </button>
-              </div>
-            ) : hasUpdate ? (
-              <>
-                <div className="flex items-center gap-2 flex-1">
-                  <ArrowUpCircle className="w-4 h-4 text-red-400" />
-                  <span className="text-xs text-red-400 font-medium">Update available</span>
-                </div>
-                <button onClick={onUninstall} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/[0.04] hover:bg-red-500/10 border border-white/[0.06] hover:border-red-500/20 text-xs text-zinc-400 hover:text-red-400 transition-all">
-                  <Trash2 className="w-3.5 h-3.5" />Uninstall
-                </button>
-                <button onClick={onOpenFolder} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-xs text-zinc-400 hover:text-white transition-all">
-                  <FolderOpen className="w-3.5 h-3.5" />Open Folder
-                </button>
-                <button onClick={() => onDownload(currentPlatform, platformUrl)} className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-red-700 to-red-500 hover:from-red-500 text-white text-sm font-medium rounded-lg transition-all shadow-md shadow-red-600/15">
-                  <ArrowUpCircle className="w-4 h-4" />Update
-                </button>
-              </>
-            ) : (
-              <button onClick={() => onDownload(currentPlatform, platformUrl)} className="flex items-center gap-2 px-4 py-2 ml-auto bg-gradient-to-r from-red-700 to-red-500 hover:from-red-500 text-white text-sm font-medium rounded-lg transition-all shadow-md shadow-red-600/15">
-                <Download className="w-4 h-4" />{status === 'error' ? 'Retry' : isSample ? 'Download' : `Install for ${platformLabels[currentPlatform]}`}
-              </button>
-            )}
-          </div>
-        ) : (
-          <div className="mt-4 px-3 py-2.5 rounded-xl bg-white/[0.02] border border-white/[0.04] text-center">
-            <span className="text-xs text-zinc-500">Not available for {platformLabels[currentPlatform]}</span>
-          </div>
-        )}
-
-        {product.fileSize && (
-          <div className="mt-2 text-[10px] text-zinc-600 text-right">Size: {formatBytes(product.fileSize * 1024 * 1024)}</div>
-        )}
-      </div>
-    </div>
+  const versionNode = hasUpdate ? (
+    <span>
+      v{installedVersion} &rarr; <span className={`v ${beta ? 'beta' : 'update'}`}>v{product.version}</span>
+    </span>
+  ) : (
+    <span>
+      {beta && <span className="beta-tag">BETA</span>}
+      <span className={`v ${beta ? 'beta' : ''}`}>v{product.version}</span>
+    </span>
   )
-}
 
-function formatBytes(bytes: number): string {
-  if (!bytes) return ''
-  const k = 1024, sizes = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
-}
+  const actionDisabled = !platformUrl
+  const installLabel = beta && !isInstalled ? 'Install beta' : 'Install'
 
-function EmptyState() {
-  const ref = useRef<HTMLDivElement>(null)
-  const iconRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    anime({
-      targets: ref.current,
-      opacity: [0, 1],
-      translateY: [30, 0],
-      duration: 700,
-      easing: 'easeOutCubic',
-    })
-    anime({
-      targets: iconRef.current,
-      scale: [0, 1],
-      rotate: ['-20deg', '0deg'],
-      duration: 800,
-      easing: 'easeOutElastic(1, 0.6)',
-      delay: 200,
-    })
-  }, [])
+  let primary: React.ReactNode
+  if (inProgress) {
+    primary = (
+      <div className="card-progress">
+        <div className="card-progress-bar">
+          <div className="card-progress-fill" style={{ width: `${dl?.percent ?? 0}%` }} />
+        </div>
+        <span className="card-progress-pct">{dl?.percent ?? 0}%</span>
+      </div>
+    )
+  } else if (hasUpdate) {
+    primary = (
+      <button
+        className="card-action update"
+        onClick={() => platformUrl && onDownload(product, platform, platformUrl)}
+        disabled={actionDisabled}
+        type="button"
+      >
+        <RefreshCw size={13} /> Update
+      </button>
+    )
+  } else if (isInstalled) {
+    primary = (
+      <button className="card-action" disabled type="button">
+        <Check size={13} /> Up to date
+      </button>
+    )
+  } else {
+    primary = (
+      <button
+        className="card-action primary"
+        onClick={() => platformUrl && onDownload(product, platform, platformUrl)}
+        disabled={actionDisabled}
+        type="button"
+      >
+        <Download size={13} /> {installLabel}
+      </button>
+    )
+  }
 
   return (
-    <div ref={ref} className="flex flex-col items-center justify-center py-20 text-center opacity-0">
-      <div ref={iconRef} className="w-16 h-16 rounded-2xl bg-gradient-to-br from-red-600/10 to-red-500/10 border border-red-600/20 flex items-center justify-center mb-5">
-        <Package className="w-7 h-7 text-red-400/60" />
+    <div className="card">
+      <div className="card-art">
+        <div className="card-art-icon">
+          <Icon size={22} />
+        </div>
+        <span className={`card-art-corner ${cornerClass}`}>{cornerLabel}</span>
       </div>
-      <h3 className="text-base font-semibold text-white mb-2">No purchases yet</h3>
-      <p className="text-sm text-zinc-500 max-w-xs leading-relaxed">
-        Your purchased VST plugins and sample packs will appear here.{' '}
-        <a href="https://hardwavestudios.com" target="_blank" rel="noreferrer" className="text-red-400 hover:text-red-300 transition-colors">
-          Browse the store
-        </a>
-      </p>
+      <div className="card-body">
+        <div className="card-cat">{categoryLabel(product)}</div>
+        <div className="card-name">{renderProductName(product, beta)}</div>
+        <p className="card-desc">{product.description || 'Hardwave plug-in.'}</p>
+        <div className="card-meta">
+          {versionNode}
+          <span>{actionDisabled ? `Not on ${platformLabels[platform]}` : formatLabel(product)}</span>
+        </div>
+        {status === 'error' && (
+          <div className="card-error">{dl?.error || 'Installation failed'}</div>
+        )}
+        <div className="card-actions">
+          {primary}
+          {(isInstalled || hasUpdate) && (
+            <button
+              className="card-action icon"
+              onClick={onOpenFolder}
+              title="Open install folder"
+              type="button"
+            >
+              <FolderOpen size={14} />
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
