@@ -330,18 +330,47 @@ export default function App() {
                   Need a hand? The fastest paths:
                 </p>
                 <p>
-                  <a href="https://hardwavestudios.com/support" target="_blank" rel="noreferrer">
+                  <a
+                    href="https://hardwavestudios.com/support"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      api.openExternalUrl('https://hardwavestudios.com/support').catch(() => {
+                        window.open('https://hardwavestudios.com/support', '_blank')
+                      })
+                    }}
+                  >
                     Open the support hub
                   </a>{' '}
                   for guides, FAQs and contact options.
                 </p>
                 <p>
                   Found a bug? Send a crash report from the plug-in window if you have one — otherwise email{' '}
-                  <a href="mailto:support@hardwavestudios.com">support@hardwavestudios.com</a> with the build version
-                  and steps to reproduce.
+                  <a
+                    href="mailto:support@hardwavestudios.com"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      api.openExternalUrl('mailto:support@hardwavestudios.com').catch(() => {
+                        window.open('mailto:support@hardwavestudios.com', '_blank')
+                      })
+                    }}
+                  >
+                    support@hardwavestudios.com
+                  </a>{' '}
+                  with the build version and steps to reproduce.
                 </p>
                 <p>
-                  Pre-release testers: report beta issues in the Discord <strong>#beta-testers</strong> channel.
+                  Pre-release testers: report beta issues in the Discord <strong>#beta-testers</strong> channel.{' '}
+                  <a
+                    href="https://discord.gg/hardwave"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      api.openExternalUrl('https://discord.gg/hardwave').catch(() => {
+                        window.open('https://discord.gg/hardwave', '_blank')
+                      })
+                    }}
+                  >
+                    Open Discord
+                  </a>
                 </p>
               </div>
             </div>
