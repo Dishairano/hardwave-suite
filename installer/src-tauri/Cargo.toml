@@ -1,6 +1,6 @@
 [package]
 name = "hardwave-suite-installer"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Hardwave Suite custom installer"
 publish = false
@@ -11,6 +11,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+# `winres` is only used on Windows to embed the UAC-requesting manifest.
+# Gated under `cfg(windows)` so non-Windows CI jobs (Linux/macOS) don't try
+# to build it — see build.rs.
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
 
 [dependencies]
 tauri = { version = "2", features = [] }

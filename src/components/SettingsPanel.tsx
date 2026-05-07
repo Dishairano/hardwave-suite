@@ -232,6 +232,13 @@ function PathsTab({
   return (
     <div role="tabpanel" id="tabpanel-paths">
       <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-4">Install Locations</h3>
+      {/*
+        TODO(post-v0.18): expose "Install plug-ins to system folder" toggle here.
+          The installer (v0.18+) grants the user write-ACL on
+          C:\Program Files\Common Files\VST3 and \CLAP, so writing to those
+          system paths from the running Suite no longer needs UAC. Wiring up
+          the backend command + path resolution is the v0.19 chunk.
+      */}
       {loading ? (
         <div className="text-sm text-zinc-500">Loading...</div>
       ) : (

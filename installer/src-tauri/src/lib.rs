@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 
+mod acl;
 mod install;
 #[cfg(windows)]
 mod shortcut;

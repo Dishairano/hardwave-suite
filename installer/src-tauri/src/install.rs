@@ -66,7 +66,17 @@ pub async fn run(
     std::fs::create_dir_all(&install_dir)
         .map_err(|e| format!("Cannot create install directory: {e}"))?;
 
-    // 3. Download zip to a temp file in the install dir
+    // 3. Grant the current user write-ACL on system VST3 / CLAP folders.
+    //    Runs while we still hold the installer's UAC elevation. Non-fatal:
+    //    if it fails (e.g. corp-locked machine, GPO-managed ACLs) we log
+    //    and continue — the Suite still works against per-user paths.
+    emit(&app, "preparing", 5, "Granting plug-in folder permissions…");
+    if let Err(e) = crate::acl::grant_user_acl_on_system_paths() {
+        eprintln!("[installer] ACL grant skipped: {e}");
+        emit(&app, "preparing", 5, "Continuing with per-user install…");
+    }
+
+    // 4. Download zip to a temp file in the install dir
     let zip_path = install_dir.join(PORTABLE_ZIP_NAME);
     download_with_progress(&app, &cancel, &download_url, &zip_path).await?;
 
