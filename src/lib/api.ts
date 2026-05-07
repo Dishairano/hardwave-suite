@@ -130,6 +130,26 @@ export async function setInstallPath(key: string, path: string): Promise<void> {
   return invoke('set_install_path', { key, path })
 }
 
+/**
+ * The canonical system VST3 path on this platform (Windows: Common Files,
+ * macOS: /Library/Audio/Plug-Ins/VST3, Linux: /usr/lib/vst3). Used by the
+ * Per-user / System scope toggle in Settings → Paths.
+ */
+export async function getSystemVst3Dir(): Promise<string> {
+  return invoke<string>('system_vst3_dir')
+}
+
+/**
+ * Probe whether the current user can write to the system VST3 folder
+ * without UAC. The v0.18 installer grants `(OI)(CI)(M)` Modify rights
+ * via icacls during install (one-time elevated step). On non-Windows
+ * this always returns true. On Windows pre-v0.18 installs, returns
+ * false and the System toggle is disabled.
+ */
+export async function probeSystemVst3Writable(): Promise<boolean> {
+  return invoke<boolean>('probe_system_vst3_writable')
+}
+
 export async function pickFolder(title: string): Promise<string | null> {
   return invoke<string | null>('pick_folder', { title })
 }

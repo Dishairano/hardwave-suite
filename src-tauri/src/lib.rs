@@ -691,6 +691,47 @@ async fn open_install_folder(category: String) -> Result<(), String> {
     Ok(())
 }
 
+/// The canonical system VST3 path on this platform. Returned alongside
+/// `default_vst3_dir()` so the UI can show both options in the Per-user /
+/// System install-scope toggle (Settings → Paths).
+#[tauri::command]
+fn system_vst3_dir() -> String {
+    #[cfg(target_os = "windows")]
+    { String::from(r"C:\Program Files\Common Files\VST3") }
+    #[cfg(target_os = "macos")]
+    { String::from("/Library/Audio/Plug-Ins/VST3") }
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    { String::from("/usr/lib/vst3") }
+}
+
+/// Probe whether the current user can write to the system VST3 folder
+/// without UAC. The v0.18 installer grants `(OI)(CI)(M)` ACL via `icacls`,
+/// so a successful probe means the install was elevated at least once.
+/// On non-Windows this always returns Ok(true) since system paths
+/// don't have the same UAC dance (mac users may still need sudo for
+/// /Library/Audio/Plug-Ins/VST3 — handled as a follow-up).
+#[tauri::command]
+fn probe_system_vst3_writable() -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let probe_dir = std::path::Path::new(r"C:\Program Files\Common Files\VST3");
+        // Try to create the dir (no-op if it exists), then write a probe file.
+        if std::fs::create_dir_all(probe_dir).is_err() {
+            return Ok(false);
+        }
+        let probe_path = probe_dir.join(".hardwave-probe");
+        match std::fs::write(&probe_path, b"hardwave-acl-probe") {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&probe_path);
+                Ok(true)
+            }
+            Err(_) => Ok(false),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    { Ok(true) }
+}
+
 #[tauri::command]
 fn get_install_paths() -> std::collections::HashMap<String, String> {
     let mut paths = std::collections::HashMap::new();
@@ -709,6 +750,11 @@ fn get_install_paths() -> std::collections::HashMap<String, String> {
     // Also include the defaults so the UI can show a "Reset" option
     paths.insert("vst3_default".to_string(), default_vst3_dir().to_string_lossy().to_string());
     paths.insert("sample_default".to_string(), default_sample_dir().to_string_lossy().to_string());
+
+    // The OS-canonical system path. Used by the Per-user / System scope
+    // toggle to point the vst3_path setting at the elevated location when
+    // the user opts in.
+    paths.insert("vst3_system".to_string(), system_vst3_dir());
 
     paths
 }
@@ -1114,6 +1160,8 @@ pub fn run() {
             open_install_folder,
             get_install_paths,
             set_install_path,
+            system_vst3_dir,
+            probe_system_vst3_writable,
             pick_folder,
             check_crash_report,
             upload_crash_report,

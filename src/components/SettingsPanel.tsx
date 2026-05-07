@@ -56,6 +56,15 @@ export function SettingsPanel({ open, onClose, userTheme, onThemeChange }: Setti
   const panelRef = useRef<HTMLDivElement>(null)
   const backdropRef = useRef<HTMLDivElement>(null)
 
+  const reloadPaths = useCallback(async () => {
+    try {
+      const next = await api.getInstallPaths()
+      setPaths(next)
+    } catch {
+      // swallow — UI keeps last known good state
+    }
+  }, [])
+
   useEffect(() => {
     if (!open) return
 
@@ -206,6 +215,7 @@ export function SettingsPanel({ open, onClose, userTheme, onThemeChange }: Setti
               loading={pathsLoading}
               onBrowse={handleBrowse}
               onReset={handleReset}
+              reloadPaths={reloadPaths}
             />
           )}
           {tab === 'appearance' && (
@@ -265,26 +275,74 @@ function PathsTab({
   loading,
   onBrowse,
   onReset,
+  reloadPaths,
 }: {
   paths: Record<string, string>
   loading: boolean
   onBrowse: (key: string, title: string) => Promise<void>
   onReset: (key: string) => Promise<void>
+  reloadPaths: () => Promise<void>
 }) {
+  // Probe once per panel open. `null` = still probing, false = locked,
+  // true = ACL grant succeeded (or non-Windows where UAC doesn't apply).
+  const [systemWritable, setSystemWritable] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    api.probeSystemVst3Writable()
+      .then((ok) => { if (!cancelled) setSystemWritable(ok) })
+      .catch(() => { if (!cancelled) setSystemWritable(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  // The toggle reads "system" iff the configured vst3 path matches the
+  // OS-canonical system path. Otherwise the user is on per-user (default)
+  // or a custom override (still treated as "user" for the purpose of the
+  // toggle — they can browse/reset separately below).
+  const scope: 'user' | 'system' =
+    paths.vst3 && paths.vst3_system && paths.vst3 === paths.vst3_system
+      ? 'system'
+      : 'user'
+
+  const handleScopeChange = async (next: 'user' | 'system') => {
+    if (next === 'system') {
+      // Point the existing vst3_path setting at the system folder. All
+      // downstream install logic (vst3_dir(), download_and_install) just
+      // reads that setting — no other code paths need to change.
+      const target = paths.vst3_system || ''
+      if (!target) return
+      await api.setInstallPath('vst3', target)
+    } else {
+      // Empty string clears the override; vst3_dir() falls back to the
+      // per-user default in default_vst3_dir().
+      await api.setInstallPath('vst3', '')
+    }
+    await reloadPaths()
+  }
+
+  const handleOpenInstaller = async () => {
+    const url = 'https://hardwavestudios.com/suite'
+    try {
+      await api.openExternalUrl(url)
+    } catch {
+      window.open(url, '_blank')
+    }
+  }
+
   return (
     <div role="tabpanel" id="tabpanel-paths">
       <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-4">Install Locations</h3>
-      {/*
-        TODO(post-v0.18): expose "Install plug-ins to system folder" toggle here.
-          The installer (v0.18+) grants the user write-ACL on
-          C:\Program Files\Common Files\VST3 and \CLAP, so writing to those
-          system paths from the running Suite no longer needs UAC. Wiring up
-          the backend command + path resolution is the v0.19 chunk.
-      */}
       {loading ? (
         <div className="text-sm text-zinc-500">Loading...</div>
       ) : (
         <div className="space-y-5">
+          <InstallScopeToggle
+            scope={scope}
+            systemPath={paths.vst3_system || ''}
+            systemWritable={systemWritable}
+            onChange={handleScopeChange}
+            onOpenInstaller={handleOpenInstaller}
+          />
           <PathSetting
             label="VST3 / CLAP Plugins"
             path={paths.vst3 || ''}
@@ -307,6 +365,107 @@ function PathsTab({
         Changes apply to future installs. Already installed plugins stay in their current location.
       </p>
     </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────
+// InstallScopeToggle — Per-user / System radio for VST3 install path.
+// Surfaces the v0.18 installer's UAC ACL grant: when the system folder
+// is writable (icacls Modify granted), users can opt into installing to
+// C:\Program Files\Common Files\VST3 with no further UAC prompts.
+// ─────────────────────────────────────────────────────────────────
+
+function InstallScopeToggle({
+  scope,
+  systemPath,
+  systemWritable,
+  onChange,
+  onOpenInstaller,
+}: {
+  scope: 'user' | 'system'
+  systemPath: string
+  systemWritable: boolean | null
+  onChange: (next: 'user' | 'system') => Promise<void> | void
+  onOpenInstaller: () => void
+}) {
+  // Only block the System option when we're certain it's not writable.
+  // While probing (`null`) we leave the option enabled to avoid a brief
+  // flash of the locked state on first open.
+  const systemLocked = systemWritable === false
+
+  return (
+    <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
+      <div className="text-[11px] font-medium text-zinc-500 uppercase tracking-wider mb-3">
+        Install scope
+      </div>
+      <div className="space-y-3">
+        <ScopeOption
+          checked={scope === 'user'}
+          disabled={false}
+          title="Per-user (recommended for solo studios)"
+          subtitle="Plug-ins install to your personal Common Files folder. Visible only to your Windows account. No UAC ever."
+          onSelect={() => { void onChange('user') }}
+        />
+        <ScopeOption
+          checked={scope === 'system'}
+          disabled={systemLocked}
+          title="System (all users on this machine)"
+          subtitle={
+            systemLocked
+              ? 'Re-run the installer to grant system-folder access (one-time UAC prompt).'
+              : `Plug-ins install to ${systemPath || 'the system folder'}. Available to every account on this machine.`
+          }
+          onSelect={() => { if (!systemLocked) void onChange('system') }}
+        />
+      </div>
+      {systemLocked && (
+        <button
+          type="button"
+          onClick={onOpenInstaller}
+          className="mt-3 inline-flex items-center gap-1.5 px-3 py-2 text-xs text-zinc-300 hover:text-white bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] rounded-lg transition-all"
+        >
+          <FolderOpen className="w-3.5 h-3.5" />
+          Open installer
+        </button>
+      )}
+    </div>
+  )
+}
+
+function ScopeOption({
+  checked,
+  disabled,
+  title,
+  subtitle,
+  onSelect,
+}: {
+  checked: boolean
+  disabled: boolean
+  title: string
+  subtitle: string
+  onSelect: () => void
+}) {
+  return (
+    <label
+      className={`flex gap-3 items-start cursor-pointer rounded-md p-2 -m-2 transition-colors ${
+        disabled
+          ? 'cursor-not-allowed opacity-50'
+          : 'hover:bg-white/[0.03]'
+      }`}
+    >
+      <input
+        type="radio"
+        name="install-scope"
+        checked={checked}
+        disabled={disabled}
+        onChange={onSelect}
+        className="mt-1 accent-red-500"
+      />
+      <div className="flex-1 min-w-0">
+        <div className="text-sm text-white font-medium leading-tight">{title}</div>
+        <div className="text-[11px] text-zinc-500 mt-1 leading-relaxed">{subtitle}</div>
+      </div>
+    </label>
   )
 }
 
