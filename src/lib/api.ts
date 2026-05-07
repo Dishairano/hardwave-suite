@@ -284,3 +284,69 @@ export async function onBetaExpired(
   const { listen } = await import('@tauri-apps/api/event')
   return listen<BetaWarningEvent>('beta:expired', (e) => callback(e.payload))
 }
+
+// ── User theme (per-user palette) ──
+//
+// Backend contract (mirrored exactly here — do NOT drift):
+//   GET    /api/user/theme  → UserTheme
+//   POST   /api/user/theme  → { ok: true, theme: UserTheme }
+//   DELETE /api/user/theme  → resets to default, returns UserTheme
+
+export interface UserThemeApplyTo {
+  suite: boolean
+  plugins: boolean
+  splash: boolean
+}
+
+export interface UserTheme {
+  primary: string       // '#RRGGBB'
+  accent: string        // '#RRGGBB'
+  glowStrength: number  // 0..1
+  applyTo: UserThemeApplyTo
+}
+
+export type UserThemePatch = Partial<{
+  primary: string
+  accent: string
+  glowStrength: number
+  applyTo: Partial<UserThemeApplyTo>
+}>
+
+const THEME_API = 'https://hardwavestudios.com/api/user/theme'
+
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem('hw_token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+export async function getUserTheme(): Promise<UserTheme> {
+  const res = await fetch(THEME_API, {
+    method: 'GET',
+    credentials: 'include',
+    headers: authHeaders(),
+  })
+  if (!res.ok) throw new Error(`Failed to load theme (${res.status})`)
+  return res.json() as Promise<UserTheme>
+}
+
+export async function setUserTheme(patch: UserThemePatch): Promise<UserTheme> {
+  const res = await fetch(THEME_API, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(patch),
+  })
+  if (!res.ok) throw new Error(`Failed to save theme (${res.status})`)
+  const body = await res.json() as { ok: boolean; theme: UserTheme }
+  return body.theme
+}
+
+export async function resetUserTheme(): Promise<UserTheme> {
+  const res = await fetch(THEME_API, {
+    method: 'DELETE',
+    credentials: 'include',
+    headers: authHeaders(),
+  })
+  if (!res.ok) throw new Error(`Failed to reset theme (${res.status})`)
+  return res.json() as Promise<UserTheme>
+}

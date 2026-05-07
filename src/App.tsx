@@ -11,7 +11,8 @@ import { SettingsPanel } from './components/SettingsPanel'
 import { BetaBuildsSection } from './components/BetaBuildsSection'
 import { getVersion } from '@tauri-apps/api/app'
 import * as api from './lib/api'
-import type { Product, SubscriptionInfo, UpdateChannel } from './lib/api'
+import type { Product, SubscriptionInfo, UpdateChannel, UserTheme } from './lib/api'
+import { applyTheme, clearThemeOverrides } from './lib/applyTheme'
 
 interface UpdateInfo {
   version: string
@@ -55,6 +56,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [updateChannel, setUpdateChannel] = useState<UpdateChannel>('stable')
   const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null)
+  const [userTheme, setUserTheme] = useState<UserTheme | null>(null)
 
   useEffect(() => {
     if (initRan.current) return
@@ -128,6 +130,36 @@ export default function App() {
   useEffect(() => {
     if (user) loadChannelAndSubscription()
   }, [user, loadChannelAndSubscription])
+
+  // Pull the user's saved theme (per-user palette) once they're authed and
+  // apply it to the document. Splash + login screens render before this
+  // effect fires, so they always paint in the Hardwave default — matches
+  // the `applyTo.splash = false` default of the backend contract.
+  useEffect(() => {
+    if (!user) {
+      setUserTheme(null)
+      clearThemeOverrides()
+      return
+    }
+    let cancelled = false
+    api.getUserTheme()
+      .then((theme) => {
+        if (cancelled) return
+        setUserTheme(theme)
+        applyTheme(theme)
+      })
+      .catch(() => {
+        // Backend missing or first-time user — keep defaults silently.
+      })
+    return () => { cancelled = true }
+  }, [user])
+
+  // Local optimistic update — called by SettingsPanel after a save so the UI
+  // re-paints instantly without waiting for a re-fetch.
+  const handleThemeChange = useCallback((next: UserTheme | null) => {
+    setUserTheme(next)
+    applyTheme(next)
+  }, [])
 
   const handleSubscribe = useCallback(async () => {
     try {
@@ -397,6 +429,8 @@ export default function App() {
           setSettingsOpen(false)
           loadChannelAndSubscription()
         }}
+        userTheme={userTheme}
+        onThemeChange={handleThemeChange}
       />
 
       {crashReport && (
