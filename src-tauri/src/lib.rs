@@ -704,6 +704,89 @@ fn system_vst3_dir() -> String {
     { String::from("/usr/lib/vst3") }
 }
 
+/// Request elevation and grant the current user (OI)(CI)(M) Modify rights on
+/// the system VST3 + CLAP folders. Spawns PowerShell with -Verb RunAs which
+/// triggers UAC; if the user clicks Yes, an elevated icacls call runs to
+/// completion. Idempotent — re-running just re-affirms the existing grant.
+///
+/// Returns:
+///   - Ok("granted") on UAC accepted + icacls succeeded for both paths
+///   - Ok("declined") on UAC denied (user clicked No)
+///   - Err(...) on PowerShell spawn failure or unexpected exit code
+///
+/// On non-Windows this is a no-op returning Ok("not_applicable").
+///
+/// Why this exists: the v0.18+ installer's icacls grant only fires during
+/// a fresh install. Auto-updated users (v0.16/v0.17 → v0.21+) reach the
+/// new System install-path toggle with default TrustedInstaller-only ACLs
+/// on Common Files\VST3, so the toggle stays disabled. This command lets
+/// the running Suite request the same grant on demand without forcing the
+/// user to re-download the installer.
+#[tauri::command]
+fn request_grant_system_acl() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        // Resolve the user account name from %USERPROFILE% (works whether
+        // elevated or not — same trick as the installer's acl.rs).
+        let user = std::env::var("USERPROFILE")
+            .ok()
+            .and_then(|p| std::path::PathBuf::from(p).file_name().map(|n| n.to_string_lossy().into_owned()))
+            .ok_or_else(|| "Could not derive Windows username from USERPROFILE".to_string())?;
+
+        // Use %COMPUTERNAME%\<user> to disambiguate from domain accounts on
+        // joined machines. Fall back to bare username if COMPUTERNAME unset.
+        let computer = std::env::var("COMPUTERNAME").unwrap_or_default();
+        let principal = if computer.is_empty() { user.clone() } else { format!("{}\\{}", computer, user) };
+
+        // The PowerShell payload run elevated. Stays simple: just New-Item
+        // (idempotent with -Force) and icacls. Returns exit 0 on full success.
+        let payload = format!(
+            "$ErrorActionPreference='Stop'; \
+             $paths = @('C:\\Program Files\\Common Files\\VST3','C:\\Program Files\\Common Files\\CLAP'); \
+             foreach ($p in $paths) {{ \
+               if (-not (Test-Path $p)) {{ New-Item -ItemType Directory -Force -Path $p | Out-Null }}; \
+               $r = & icacls $p /grant '{}:(OI)(CI)(M)' /T /Q; \
+               if ($LASTEXITCODE -ne 0) {{ throw \"icacls failed on $p: $r\" }} \
+             }}; exit 0",
+            principal.replace("'", "''")
+        );
+
+        // Outer powershell.exe (non-elevated) calls Start-Process to launch
+        // an elevated powershell.exe. -Wait so we can read the exit code.
+        // -WindowStyle Hidden so no console window flashes.
+        let outer = format!(
+            "$p = Start-Process powershell.exe \
+              -ArgumentList @('-NoProfile','-WindowStyle','Hidden','-Command',\"& {{ {} }}\") \
+              -Verb RunAs -Wait -PassThru -WindowStyle Hidden; \
+             exit $p.ExitCode",
+            payload.replace("\"", "`\"")
+        );
+
+        let out = std::process::Command::new("powershell.exe")
+            .arg("-NoProfile")
+            .arg("-WindowStyle").arg("Hidden")
+            .arg("-Command")
+            .arg(&outer)
+            .output()
+            .map_err(|e| format!("Failed to spawn powershell: {}", e))?;
+
+        // Exit code 1223 (0x4C7) = ERROR_CANCELLED — user clicked No on UAC.
+        // Exit code 0 = icacls succeeded on both paths.
+        // Anything else = something broke; bubble stderr up.
+        match out.status.code() {
+            Some(0) => Ok("granted".into()),
+            Some(1223) => Ok("declined".into()),
+            Some(code) => {
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                Err(format!("Elevation grant failed with exit code {}: {}", code, stderr.trim()))
+            }
+            None => Err("powershell terminated without an exit code".into()),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    { Ok("not_applicable".into()) }
+}
+
 /// Probe whether the current user can write to the system VST3 folder
 /// without UAC. The v0.18 installer grants `(OI)(CI)(M)` ACL via `icacls`,
 /// so a successful probe means the install was elevated at least once.
@@ -1162,6 +1245,7 @@ pub fn run() {
             set_install_path,
             system_vst3_dir,
             probe_system_vst3_writable,
+            request_grant_system_acl,
             pick_folder,
             check_crash_report,
             upload_crash_report,

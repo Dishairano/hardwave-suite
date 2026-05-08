@@ -320,12 +320,29 @@ function PathsTab({
     await reloadPaths()
   }
 
-  const handleOpenInstaller = async () => {
-    const url = 'https://hardwavestudios.com/suite'
+  // Run the in-app elevation flow. On success we re-probe (the probe is the
+  // source of truth for whether the ACL took) and then auto-switch to System
+  // scope, since clicking the button is a strong signal the user wants it.
+  const handleGrantSystemAccess = async (): Promise<{ ok: true } | { ok: false; reason: 'declined' | 'error'; message?: string }> => {
     try {
-      await api.openExternalUrl(url)
-    } catch {
-      window.open(url, '_blank')
+      const result = await api.requestGrantSystemAcl()
+      if (result === 'granted') {
+        // Re-probe — only flip the UI once we've confirmed the ACL is live.
+        const writable = await api.probeSystemVst3Writable()
+        setSystemWritable(writable)
+        if (writable) {
+          await handleScopeChange('system')
+          return { ok: true }
+        }
+        return { ok: false, reason: 'error', message: 'Grant returned success but the folder is still not writable.' }
+      }
+      if (result === 'declined') {
+        return { ok: false, reason: 'declined' }
+      }
+      // not_applicable — shouldn't reach here on Windows where the button is shown.
+      return { ok: false, reason: 'error', message: 'Elevation is not applicable on this platform.' }
+    } catch (e) {
+      return { ok: false, reason: 'error', message: e instanceof Error ? e.message : String(e) }
     }
   }
 
@@ -341,7 +358,7 @@ function PathsTab({
             systemPath={paths.vst3_system || ''}
             systemWritable={systemWritable}
             onChange={handleScopeChange}
-            onOpenInstaller={handleOpenInstaller}
+            onGrantSystemAccess={handleGrantSystemAccess}
           />
           <PathSetting
             label="VST3 / CLAP Plugins"
@@ -375,23 +392,57 @@ function PathsTab({
 // C:\Program Files\Common Files\VST3 with no further UAC prompts.
 // ─────────────────────────────────────────────────────────────────
 
+type GrantResult = { ok: true } | { ok: false; reason: 'declined' | 'error'; message?: string }
+type GrantStatus =
+  | { kind: 'idle' }
+  | { kind: 'pending' }
+  | { kind: 'success' }
+  | { kind: 'declined' }
+  | { kind: 'error'; message: string }
+
 function InstallScopeToggle({
   scope,
   systemPath,
   systemWritable,
   onChange,
-  onOpenInstaller,
+  onGrantSystemAccess,
 }: {
   scope: 'user' | 'system'
   systemPath: string
   systemWritable: boolean | null
   onChange: (next: 'user' | 'system') => Promise<void> | void
-  onOpenInstaller: () => void
+  onGrantSystemAccess: () => Promise<GrantResult>
 }) {
   // Only block the System option when we're certain it's not writable.
   // While probing (`null`) we leave the option enabled to avoid a brief
   // flash of the locked state on first open.
   const systemLocked = systemWritable === false
+  const [grant, setGrant] = useState<GrantStatus>({ kind: 'idle' })
+
+  const handleGrant = async () => {
+    setGrant({ kind: 'pending' })
+    const res = await onGrantSystemAccess()
+    if (res.ok) {
+      setGrant({ kind: 'success' })
+      return
+    }
+    if (res.reason === 'declined') {
+      setGrant({ kind: 'declined' })
+      return
+    }
+    setGrant({ kind: 'error', message: res.message || 'Something went wrong granting system access.' })
+  }
+
+  // Selecting the System radio while it's still locked should kick off the
+  // grant flow — the user clearly wants System scope, so we treat the click
+  // as an implicit "Grant system access".
+  const handleSystemSelect = () => {
+    if (systemLocked) {
+      void handleGrant()
+      return
+    }
+    void onChange('system')
+  }
 
   return (
     <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
@@ -408,25 +459,59 @@ function InstallScopeToggle({
         />
         <ScopeOption
           checked={scope === 'system'}
-          disabled={systemLocked}
+          disabled={false}
           title="System (all users on this machine)"
           subtitle={
             systemLocked
-              ? 'Re-run the installer to grant system-folder access (one-time UAC prompt).'
+              ? 'Needs a one-time UAC prompt to unlock. Click "Grant system access" below.'
               : `Plug-ins install to ${systemPath || 'the system folder'}. Available to every account on this machine.`
           }
-          onSelect={() => { if (!systemLocked) void onChange('system') }}
+          onSelect={handleSystemSelect}
         />
       </div>
       {systemLocked && (
-        <button
-          type="button"
-          onClick={onOpenInstaller}
-          className="mt-3 inline-flex items-center gap-1.5 px-3 py-2 text-xs text-zinc-300 hover:text-white bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] rounded-lg transition-all"
-        >
-          <FolderOpen className="w-3.5 h-3.5" />
-          Open installer
-        </button>
+        <div className="mt-3 space-y-2">
+          <button
+            type="button"
+            onClick={handleGrant}
+            disabled={grant.kind === 'pending'}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-red-600/90 hover:bg-red-500 disabled:opacity-60 disabled:cursor-not-allowed border border-red-500/40 rounded-lg transition-all"
+          >
+            <Lock className="w-3.5 h-3.5" />
+            {grant.kind === 'pending' ? 'Waiting for permission…' : 'Grant system access now'}
+          </button>
+          <p className="text-[11px] text-zinc-500 leading-relaxed">
+            One UAC prompt. Won't ask again on this machine.
+          </p>
+          {grant.kind === 'declined' && (
+            <p className="text-[11px] text-zinc-400 leading-relaxed">
+              Permission declined. The button stays available — try again any time.
+            </p>
+          )}
+          {grant.kind === 'error' && (
+            <div className="rounded-md border border-red-500/30 bg-red-500/10 p-2 text-[11px] text-red-200 leading-relaxed">
+              <div className="flex items-start gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                <div>
+                  <div>{grant.message}</div>
+                  <button
+                    type="button"
+                    onClick={handleGrant}
+                    className="mt-1 underline text-red-100 hover:text-white"
+                  >
+                    Try again
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {!systemLocked && grant.kind === 'success' && (
+        <div className="mt-3 inline-flex items-center gap-1.5 text-[11px] text-emerald-400">
+          <Check className="w-3.5 h-3.5" />
+          System access granted — plug-ins will install to Program Files.
+        </div>
       )}
     </div>
   )

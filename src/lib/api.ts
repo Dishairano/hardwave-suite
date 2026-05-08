@@ -150,6 +150,25 @@ export async function probeSystemVst3Writable(): Promise<boolean> {
   return invoke<boolean>('probe_system_vst3_writable')
 }
 
+/**
+ * Request elevation and grant the current user Modify rights on the
+ * system VST3 + CLAP folders. Triggers a single UAC prompt; on accept,
+ * an elevated PowerShell runs `icacls /grant` so future plug-in installs
+ * to Common Files\VST3 work without further elevation.
+ *
+ * Resolves to:
+ *   - 'granted' — UAC accepted and icacls succeeded
+ *   - 'declined' — UAC denied (user clicked No)
+ *   - 'not_applicable' — non-Windows host
+ *
+ * Throws on PowerShell spawn failure or unexpected exit code.
+ */
+export async function requestGrantSystemAcl(): Promise<'granted' | 'declined' | 'not_applicable'> {
+  const result = await invoke<string>('request_grant_system_acl')
+  if (result === 'granted' || result === 'declined' || result === 'not_applicable') return result
+  throw new Error(`Unexpected result: ${result}`)
+}
+
 export async function pickFolder(title: string): Promise<string | null> {
   return invoke<string | null>('pick_folder', { title })
 }
