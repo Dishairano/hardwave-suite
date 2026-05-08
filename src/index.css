@@ -578,6 +578,11 @@ html, body, #root {
   color: var(--text-dim);
 }
 .card-action.icon:hover { color: var(--text); }
+.card-action.icon.danger:hover {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.08);
+}
 
 .card-progress {
   display: flex;

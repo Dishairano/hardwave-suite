@@ -13,6 +13,7 @@ import {
   Check,
   RefreshCw,
   AlertCircle,
+  Trash2,
 } from 'lucide-react'
 import * as api from '../lib/api'
 import type { Product } from '../lib/api'
@@ -224,6 +225,27 @@ export function HubView({
     }
   }, [])
 
+  const handleUninstall = useCallback(async (product: Product) => {
+    const ok = window.confirm(
+      `Uninstall ${product.name}?\n\nThis will remove the plug-in files. Make sure your DAW is closed first.`,
+    )
+    if (!ok) return
+    try {
+      await api.uninstallPlugin(product.slug, product.category || 'vst')
+      setInstalledVersions((prev) => {
+        const next = { ...prev }
+        delete next[product.slug]
+        return next
+      })
+      // Clear any session install state on the cards.
+      const platform = detectPlatform()
+      dispatch({ type: 'reset', fileId: `${product.id}-${platform}` })
+    } catch (err) {
+      const msg = String(err)
+      window.alert(`Uninstall failed: ${msg}`)
+    }
+  }, [])
+
   // Filter + search logic
   const filtered = useMemo(() => {
     let list = products
@@ -360,6 +382,7 @@ export function HubView({
               installedVersion={installedVersions[product.slug] ?? null}
               onDownload={handleDownload}
               onOpenFolder={() => api.openInstallFolder(product.category || 'vst')}
+              onUninstall={() => handleUninstall(product)}
             />
           ))}
         </div>
@@ -408,9 +431,10 @@ interface ProductCardProps {
   installedVersion: string | null
   onDownload: (product: Product, platform: string, url: string) => void
   onOpenFolder: () => void
+  onUninstall: () => void
 }
 
-function ProductCard({ product, downloads, installedVersion, onDownload, onOpenFolder }: ProductCardProps) {
+function ProductCard({ product, downloads, installedVersion, onDownload, onOpenFolder, onUninstall }: ProductCardProps) {
   const platform = detectPlatform()
   const isSample = product.category === 'sample' || product.category === 'preset'
   const platformUrl = isSample
@@ -520,14 +544,24 @@ function ProductCard({ product, downloads, installedVersion, onDownload, onOpenF
         <div className="card-actions">
           {primary}
           {(isInstalled || hasUpdate) && (
-            <button
-              className="card-action icon"
-              onClick={onOpenFolder}
-              title="Open install folder"
-              type="button"
-            >
-              <FolderOpen size={14} />
-            </button>
+            <>
+              <button
+                className="card-action icon"
+                onClick={onOpenFolder}
+                title="Open install folder"
+                type="button"
+              >
+                <FolderOpen size={14} />
+              </button>
+              <button
+                className="card-action icon danger"
+                onClick={onUninstall}
+                title={`Uninstall ${product.name}`}
+                type="button"
+              >
+                <Trash2 size={14} />
+              </button>
+            </>
           )}
         </div>
       </div>
