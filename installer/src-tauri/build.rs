@@ -1,21 +1,11 @@
 fn main() {
-    // Embed the Windows manifest so the installer EXE triggers UAC and runs
-    // elevated. We need elevation to write ACLs on system plug-in folders
-    // (Common Files\VST3 and \CLAP) — see src/acl.rs.
+    // The Tauri NSIS bundle uses installMode: "perMachine" which triggers
+    // UAC for the install. NSIS launches this binary as a child process,
+    // so it inherits the elevated token. icacls calls in src/acl.rs run
+    // inside that elevation context; no embedded manifest needed.
     //
-    // Use a custom .rc file that embeds ONLY the RT_MANIFEST resource.
-    // winres's default `set_manifest_file` path also emits a VERSIONINFO
-    // block, which collides with the one Tauri's build pipeline embeds —
-    // manifesting as a CVT1100 "duplicate resource" linker error on
-    // Windows (broke v0.18.1 / v0.19.0 / v0.20.0 release builds).
-    // Pointing winres at our manifest-only manifest.rc bypasses winres's
-    // auto-generated VERSIONINFO and leaves the Tauri version block alone.
-    #[cfg(target_os = "windows")]
-    {
-        let mut res = winres::WindowsResource::new();
-        res.set_resource_file("manifest.rc");
-        res.compile().expect("Failed to embed Windows manifest");
-    }
-
+    // Earlier attempts to add a winres-embedded manifest collided with
+    // tauri-winres (which tauri-build uses internally to embed VERSIONINFO),
+    // producing CVT1100 duplicate-resource linker errors. Removed.
     tauri_build::build()
 }

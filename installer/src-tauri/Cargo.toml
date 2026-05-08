@@ -12,11 +12,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
-# `winres` is only used on Windows to embed the UAC-requesting manifest.
-# Gated under `cfg(windows)` so non-Windows CI jobs (Linux/macOS) don't try
-# to build it — see build.rs.
-[target.'cfg(windows)'.build-dependencies]
-winres = "0.1"
 
 [dependencies]
 tauri = { version = "2", features = [] }
