@@ -739,14 +739,21 @@ fn request_grant_system_acl() -> Result<String, String> {
         let principal = if computer.is_empty() { user.clone() } else { format!("{}\\{}", computer, user) };
 
         // The PowerShell payload run elevated. Stays simple: just New-Item
-        // (idempotent with -Force) and icacls. Returns exit 0 on full success.
+        // (idempotent with -Force) and icacls. Returns icacls's exit code on
+        // failure, 0 on success.
+        //
+        // No `throw` block: a previous version had `throw "...$p:..."` which
+        // PowerShell tokenizer parses as a drive-qualified variable reference
+        // (the `${drive:name}` syntax) and bombs at parse time with
+        // "Variable reference is not valid". Exiting with the icacls code
+        // via $LASTEXITCODE is simpler and dodges the interpolation trap.
         let payload = format!(
             "$ErrorActionPreference='Stop'; \
              $paths = @('C:\\Program Files\\Common Files\\VST3','C:\\Program Files\\Common Files\\CLAP'); \
              foreach ($p in $paths) {{ \
                if (-not (Test-Path $p)) {{ New-Item -ItemType Directory -Force -Path $p | Out-Null }}; \
-               $r = & icacls $p /grant '{}:(OI)(CI)(M)' /T /Q; \
-               if ($LASTEXITCODE -ne 0) {{ throw \"icacls failed on $p: $r\" }} \
+               & icacls $p /grant '{}:(OI)(CI)(M)' /T /Q | Out-Null; \
+               if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }} \
              }}; exit 0",
             principal.replace("'", "''")
         );
