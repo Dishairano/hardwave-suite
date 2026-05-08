@@ -1,0 +1,8 @@
+// Manifest-only resource script.
+//
+// Embeds the UAC requireAdministrator manifest at resource type 24
+// (RT_MANIFEST), name id 1 — without emitting a VERSIONINFO block.
+// This avoids the CVT1100 "duplicate resource" linker error that
+// occurred when winres's auto-generated VERSIONINFO collided with
+// the one Tauri's build pipeline already emits.
+1 24 "manifest.xml"
