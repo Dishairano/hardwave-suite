@@ -726,72 +726,86 @@ fn system_vst3_dir() -> String {
 fn request_grant_system_acl() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        // Capture the elevated child's stdout/stderr to temp files so we can
-        // surface the actual icacls / Get-Acl output if it fails. Without
-        // these redirects the elevated console goes to the void and Rust
-        // sees only an exit code with no message.
+        // Diagnostics are captured by the elevated child writing to a
+        // transcript log itself — NOT via Start-Process's
+        // -RedirectStandardOutput/Error parameters. Those parameters live in
+        // a different parameter set than -Verb RunAs (because Windows
+        // ShellExecute doesn't pipe stdout/stderr through UAC), and
+        // combining them produces "Parameter set cannot be resolved" — the
+        // bug that broke v0.22.2..v0.22.4: PowerShell rejected the
+        // command, no elevated process ever ran, icacls never ran, ACL
+        // never changed, but the outer exited 0 anyway because
+        // `exit $null.ExitCode` is `exit 0`.
         let temp_dir = std::env::temp_dir();
-        let stdout_log = temp_dir.join("hardwave-acl-grant.out.log");
-        let stderr_log = temp_dir.join("hardwave-acl-grant.err.log");
-        let _ = std::fs::remove_file(&stdout_log);
-        let _ = std::fs::remove_file(&stderr_log);
+        let log_path = temp_dir.join("hardwave-acl-grant.log");
+        let _ = std::fs::remove_file(&log_path);
 
-        // Build the elevated payload. Defense-in-depth strategy:
-        //
-        //   1. Grant to *S-1-5-32-545 (BUILTIN\Users well-known SID).
-        //   2. ALSO grant to %USERNAME% as a belt-and-braces fallback in
-        //      case the SID-only grant doesn't take on this machine.
-        //   3. Get-Acl + format the resulting ACEs into the stdout log so
-        //      a future failure shows the real ACL state, not just exit 0.
-        //   4. Self-probe: write a .hardwave-probe file from inside the
-        //      elevated context. If the probe write fails after the grant,
-        //      icacls didn't take and we exit non-zero with stderr.
-        //
-        // Window stays fully hidden. Diagnostics are written to the temp
-        // logs which Rust pulls back into the error message if anything
-        // fails. Loud-on-failure, silent-on-success.
-        let payload = "\
-$ErrorActionPreference='Stop'; \
-$paths = @('C:\\Program Files\\Common Files\\VST3','C:\\Program Files\\Common Files\\CLAP'); \
-$user = $env:USERNAME; \
-$grantSid = '*S-1-5-32-545:(OI)(CI)(M)'; \
-$grantUser = ($user + ':(OI)(CI)(M)'); \
-$failures = @(); \
-foreach ($p in $paths) {{ \
-    Write-Host ('--- ' + $p + ' ---'); \
-    if (-not (Test-Path $p)) {{ New-Item -ItemType Directory -Force -Path $p | Out-Null; Write-Host ('Created ' + $p) }}; \
-    & icacls $p /grant $grantSid /T; \
-    Write-Host ('icacls grant SID exit code: ' + $LASTEXITCODE); \
-    & icacls $p /grant $grantUser /T; \
-    Write-Host ('icacls grant USER exit code: ' + $LASTEXITCODE); \
-    Write-Host ''; \
-    Write-Host 'Get-Acl after grant:'; \
-    Get-Acl $p | Format-List | Out-String -Width 200 | Write-Host; \
-    $probe = Join-Path $p '.hardwave-probe'; \
-    try {{ \
-        Set-Content -Path $probe -Value 'hardwave-grant-probe' -Force; \
-        Remove-Item $probe -Force -ErrorAction SilentlyContinue; \
-        Write-Host ('Self-probe write SUCCESS at ' + $probe) \
-    }} catch {{ \
-        $failures += ('self-probe write failed at ' + $probe + ': ' + $_.Exception.Message); \
-        Write-Host ('Self-probe write FAILED: ' + $_.Exception.Message) \
-    }} \
-}}; \
-if ($failures.Count -gt 0) {{ exit 1 }} else {{ exit 0 }}";
+        // The elevated payload starts a transcript that captures every
+        // stream (stdout, stderr, Write-Host, errors), runs the grants,
+        // then stops the transcript. Rust reads the file after the
+        // elevated child exits — independent of the Start-Process
+        // parameter-set restriction.
+        let log_path_pwsh = log_path.display().to_string().replace('\\', "\\\\");
+        let payload = format!(
+            "Start-Transcript -Path '{}' -Force | Out-Null; \
+             try {{ \
+                 $ErrorActionPreference='Stop'; \
+                 $paths = @('C:\\Program Files\\Common Files\\VST3','C:\\Program Files\\Common Files\\CLAP'); \
+                 $user = $env:USERNAME; \
+                 $grantSid = '*S-1-5-32-545:(OI)(CI)(M)'; \
+                 $grantUser = ($user + ':(OI)(CI)(M)'); \
+                 $failures = @(); \
+                 foreach ($p in $paths) {{ \
+                     Write-Host ('--- ' + $p + ' ---'); \
+                     if (-not (Test-Path $p)) {{ New-Item -ItemType Directory -Force -Path $p | Out-Null; Write-Host ('Created ' + $p) }}; \
+                     & icacls $p /grant $grantSid /T; \
+                     Write-Host ('icacls grant SID exit code: ' + $LASTEXITCODE); \
+                     & icacls $p /grant $grantUser /T; \
+                     Write-Host ('icacls grant USER exit code: ' + $LASTEXITCODE); \
+                     Write-Host ''; \
+                     Write-Host 'Get-Acl after grant:'; \
+                     Get-Acl $p | Format-List | Out-String -Width 200 | Write-Host; \
+                     $probe = Join-Path $p '.hardwave-probe'; \
+                     try {{ \
+                         Set-Content -Path $probe -Value 'hardwave-grant-probe' -Force; \
+                         Remove-Item $probe -Force -ErrorAction SilentlyContinue; \
+                         Write-Host ('Self-probe write SUCCESS at ' + $probe) \
+                     }} catch {{ \
+                         $failures += ('self-probe write failed at ' + $probe + ': ' + $_.Exception.Message); \
+                         Write-Host ('Self-probe write FAILED: ' + $_.Exception.Message) \
+                     }} \
+                 }}; \
+                 if ($failures.Count -gt 0) {{ \
+                     Stop-Transcript | Out-Null; \
+                     exit 1 \
+                 }} else {{ \
+                     Stop-Transcript | Out-Null; \
+                     exit 0 \
+                 }} \
+             }} catch {{ \
+                 Write-Host ('FATAL: ' + $_.Exception.Message); \
+                 try {{ Stop-Transcript | Out-Null }} catch {{ }}; \
+                 exit 99 \
+             }}",
+            log_path_pwsh
+        );
 
-        // Outer powershell launches the elevated child via Start-Process.
-        // -WindowStyle Hidden + -RedirectStandardOutput / -RedirectStandard
-        // Error keeps the whole thing silent; diagnostics still land in
-        // the temp logs Rust reads back if the grant doesn't take effect.
+        // Outer Start-Process uses ONLY parameters compatible with -Verb
+        // RunAs: -ArgumentList, -Wait, -PassThru, -WindowStyle. No stream
+        // redirection (incompatible with UAC's ShellExecute path). The
+        // transcript inside the inner script is how we get the diagnostics.
+        // $LASTEXITCODE is set after a Start-Process -Wait -PassThru via
+        // $p.ExitCode, but we explicitly set $ErrorActionPreference=Stop on
+        // the outer too so any Start-Process failure terminates the outer
+        // with non-zero exit instead of silently exiting 0.
         let outer = format!(
-            "$p = Start-Process powershell.exe \
+            "$ErrorActionPreference='Stop'; \
+             $p = Start-Process powershell.exe \
               -ArgumentList @('-NoProfile','-WindowStyle','Hidden','-Command',\"& {{ {} }}\") \
-              -Verb RunAs -Wait -PassThru -WindowStyle Hidden \
-              -RedirectStandardOutput '{}' -RedirectStandardError '{}'; \
+              -Verb RunAs -Wait -PassThru -WindowStyle Hidden; \
+             if ($null -eq $p) {{ exit 90 }}; \
              exit $p.ExitCode",
             payload.replace("\"", "`\""),
-            stdout_log.display().to_string().replace('\\', "\\\\"),
-            stderr_log.display().to_string().replace('\\', "\\\\"),
         );
 
         let out = std::process::Command::new("powershell.exe")
@@ -802,15 +816,14 @@ if ($failures.Count -gt 0) {{ exit 1 }} else {{ exit 0 }}";
             .output()
             .map_err(|e| format!("Failed to spawn powershell: {}", e))?;
 
-        // Pull the elevated child's stdout + stderr so any non-success
-        // path can surface the actual icacls / Get-Acl / probe output.
+        // Pull the elevated transcript (which contains everything the
+        // child wrote — Write-Host, stderr, errors, you name it) plus
+        // the outer powershell's own stderr so failures explain themselves.
         let read_logs = || -> String {
-            let so = std::fs::read_to_string(&stdout_log).unwrap_or_default();
-            let se = std::fs::read_to_string(&stderr_log).unwrap_or_default();
+            let transcript = std::fs::read_to_string(&log_path).unwrap_or_default();
             let outer_err = String::from_utf8_lossy(&out.stderr).to_string();
             let mut parts = Vec::new();
-            if !so.trim().is_empty() { parts.push(format!("STDOUT:\n{}", so.trim())); }
-            if !se.trim().is_empty() { parts.push(format!("STDERR:\n{}", se.trim())); }
+            if !transcript.trim().is_empty() { parts.push(format!("TRANSCRIPT:\n{}", transcript.trim())); }
             if !outer_err.trim().is_empty() { parts.push(format!("OUTER:\n{}", outer_err.trim())); }
             if parts.is_empty() { "(no diagnostic output)".into() } else { parts.join("\n\n") }
         };
