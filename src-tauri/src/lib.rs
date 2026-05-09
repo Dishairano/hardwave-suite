@@ -726,47 +726,81 @@ fn system_vst3_dir() -> String {
 fn request_grant_system_acl() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        // Use the well-known SID for BUILTIN\Users (S-1-5-32-545). Every
-        // local non-admin account is a member, the SID is identical on every
-        // Windows install regardless of language / locale / domain join /
-        // username encoding, and icacls accepts it without any name
-        // resolution. Avoids the entire MACHINENAME\username dance that
-        // failed silently on at least one user's machine in v0.22.1.
-        //
-        // The * prefix tells icacls "this is a SID, not a name" so it skips
-        // LSA name-lookup entirely.
-        let principal = "*S-1-5-32-545";
-
         // Capture the elevated child's stdout/stderr to temp files so we can
-        // surface the actual icacls error if it fails. Without this redirect
-        // the elevated console output goes to the void and Rust sees only
-        // "exit code 1, stderr empty".
+        // surface the actual icacls / Get-Acl output if it fails. Without
+        // these redirects the elevated console goes to the void and Rust
+        // sees only an exit code with no message.
         let temp_dir = std::env::temp_dir();
         let stdout_log = temp_dir.join("hardwave-acl-grant.out.log");
         let stderr_log = temp_dir.join("hardwave-acl-grant.err.log");
-        // Best-effort wipe before we start; if these have content from a
-        // prior run we'd misattribute the message.
         let _ = std::fs::remove_file(&stdout_log);
         let _ = std::fs::remove_file(&stderr_log);
 
-        let payload = format!(
-            "$ErrorActionPreference='Stop'; \
-             $paths = @('C:\\Program Files\\Common Files\\VST3','C:\\Program Files\\Common Files\\CLAP'); \
-             foreach ($p in $paths) {{ \
-               if (-not (Test-Path $p)) {{ New-Item -ItemType Directory -Force -Path $p | Out-Null }}; \
-               & icacls $p /grant '{}:(OI)(CI)(M)' /T /Q; \
-               if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }} \
-             }}; exit 0",
-            principal
-        );
+        // Build the elevated payload. Defense-in-depth strategy:
+        //
+        //   1. Grant to *S-1-5-32-545 (BUILTIN\Users well-known SID).
+        //   2. ALSO grant to %USERNAME% as a belt-and-braces fallback in
+        //      case the SID-only grant doesn't take on this machine.
+        //   3. Get-Acl + format the resulting ACEs into the stdout log so
+        //      a future failure shows the real ACL state, not just exit 0.
+        //   4. Self-probe: write a .hardwave-probe file from inside the
+        //      elevated context. If the probe write fails after the grant,
+        //      icacls didn't take and we exit non-zero with stderr.
+        //
+        // Pause at the end so the user sees the window — no -WindowStyle
+        // Hidden in the outer Start-Process this time.
+        let payload = "\
+$ErrorActionPreference='Stop'; \
+$paths = @('C:\\Program Files\\Common Files\\VST3','C:\\Program Files\\Common Files\\CLAP'); \
+$user = $env:USERNAME; \
+$grantSid = '*S-1-5-32-545:(OI)(CI)(M)'; \
+$grantUser = ($user + ':(OI)(CI)(M)'); \
+$failures = @(); \
+foreach ($p in $paths) {{ \
+    Write-Host ('--- ' + $p + ' ---'); \
+    if (-not (Test-Path $p)) {{ New-Item -ItemType Directory -Force -Path $p | Out-Null; Write-Host ('Created ' + $p) }}; \
+    & icacls $p /grant $grantSid /T; \
+    Write-Host ('icacls grant SID exit code: ' + $LASTEXITCODE); \
+    & icacls $p /grant $grantUser /T; \
+    Write-Host ('icacls grant USER exit code: ' + $LASTEXITCODE); \
+    Write-Host ''; \
+    Write-Host 'Get-Acl after grant:'; \
+    Get-Acl $p | Format-List | Out-String -Width 200 | Write-Host; \
+    $probe = Join-Path $p '.hardwave-probe'; \
+    try {{ \
+        Set-Content -Path $probe -Value 'hardwave-grant-probe' -Force; \
+        Remove-Item $probe -Force -ErrorAction SilentlyContinue; \
+        Write-Host ('Self-probe write SUCCESS at ' + $probe) \
+    }} catch {{ \
+        $failures += ('self-probe write failed at ' + $probe + ': ' + $_.Exception.Message); \
+        Write-Host ('Self-probe write FAILED: ' + $_.Exception.Message) \
+    }} \
+}}; \
+if ($failures.Count -gt 0) {{ \
+    Write-Host ''; \
+    Write-Host 'FAILURES:'; \
+    $failures | ForEach-Object {{ Write-Host (' - ' + $_) }}; \
+    Write-Host ''; \
+    Write-Host 'Press Enter to close...'; \
+    Read-Host | Out-Null; \
+    exit 1 \
+}} else {{ \
+    Write-Host ''; \
+    Write-Host 'All grants applied + probes succeeded. Closing in 3 seconds...'; \
+    Start-Sleep -Seconds 3; \
+    exit 0 \
+}}";
 
         // Outer powershell launches the elevated child via Start-Process.
         // -RedirectStandardOutput / -RedirectStandardError pipe the child's
-        // streams into our temp files so we can read them after -Wait.
+        // streams into our temp files. We DROP -WindowStyle Hidden so the
+        // user actually sees the window — both for confidence that
+        // something happened and to preserve the diagnostic output if the
+        // child crashes before writing logs.
         let outer = format!(
             "$p = Start-Process powershell.exe \
-              -ArgumentList @('-NoProfile','-WindowStyle','Hidden','-Command',\"& {{ {} }}\") \
-              -Verb RunAs -Wait -PassThru -WindowStyle Hidden \
+              -ArgumentList @('-NoProfile','-Command',\"& {{ {} }}\") \
+              -Verb RunAs -Wait -PassThru \
               -RedirectStandardOutput '{}' -RedirectStandardError '{}'; \
              exit $p.ExitCode",
             payload.replace("\"", "`\""),
@@ -782,41 +816,52 @@ fn request_grant_system_acl() -> Result<String, String> {
             .output()
             .map_err(|e| format!("Failed to spawn powershell: {}", e))?;
 
-        // Helper that pulls the elevated child's stdout + stderr together so
-        // a failure message includes whatever icacls actually printed.
+        // Pull the elevated child's stdout + stderr so any non-success
+        // path can surface the actual icacls / Get-Acl / probe output.
         let read_logs = || -> String {
             let so = std::fs::read_to_string(&stdout_log).unwrap_or_default();
             let se = std::fs::read_to_string(&stderr_log).unwrap_or_default();
-            let mut combined = String::new();
-            if !se.trim().is_empty() {
-                combined.push_str("stderr: ");
-                combined.push_str(se.trim());
-            }
-            if !so.trim().is_empty() {
-                if !combined.is_empty() { combined.push_str(" | "); }
-                combined.push_str("stdout: ");
-                combined.push_str(so.trim());
-            }
-            // Also surface outer powershell's own stderr if there is one.
             let outer_err = String::from_utf8_lossy(&out.stderr).to_string();
-            if !outer_err.trim().is_empty() {
-                if !combined.is_empty() { combined.push_str(" | "); }
-                combined.push_str("outer: ");
-                combined.push_str(outer_err.trim());
-            }
-            if combined.is_empty() { "(no diagnostic output)".into() } else { combined }
+            let mut parts = Vec::new();
+            if !so.trim().is_empty() { parts.push(format!("STDOUT:\n{}", so.trim())); }
+            if !se.trim().is_empty() { parts.push(format!("STDERR:\n{}", se.trim())); }
+            if !outer_err.trim().is_empty() { parts.push(format!("OUTER:\n{}", outer_err.trim())); }
+            if parts.is_empty() { "(no diagnostic output)".into() } else { parts.join("\n\n") }
         };
 
-        match out.status.code() {
-            Some(0) => Ok("granted".into()),
+        let exit_code = out.status.code();
+        match exit_code {
+            Some(0) => {
+                // Belt and braces: don't trust icacls's exit 0. Run our
+                // own probe NOW and only return granted if it actually
+                // writes. If the elevated self-probe inside PowerShell
+                // succeeded but the non-elevated probe from this Rust
+                // process fails, the ACL didn't apply to our user — most
+                // likely a UAC-elevation bypass (running as admin already,
+                // never-notify policy, etc.).
+                let probe_dir = std::path::Path::new(r"C:\Program Files\Common Files\VST3");
+                let probe_path = probe_dir.join(".hardwave-probe");
+                let probe_ok = std::fs::write(&probe_path, b"post-grant-verify").is_ok();
+                let _ = std::fs::remove_file(&probe_path);
+                if probe_ok {
+                    Ok("granted".into())
+                } else {
+                    Err(format!(
+                        "icacls reported success but post-grant probe still cannot write to {}. \
+                         The elevation may not have actually run. Diagnostic output:\n\n{}",
+                        probe_dir.display(),
+                        read_logs()
+                    ))
+                }
+            }
             Some(1223) => Ok("declined".into()),
             Some(code) => Err(format!(
-                "Elevation grant failed with exit code {}: {}",
+                "Elevation grant failed with exit code {}.\n\n{}",
                 code,
                 read_logs()
             )),
             None => Err(format!(
-                "powershell terminated without an exit code; {}",
+                "powershell terminated without an exit code.\n\n{}",
                 read_logs()
             )),
         }
