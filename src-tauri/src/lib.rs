@@ -745,7 +745,15 @@ fn request_grant_system_acl() -> Result<String, String> {
         // then stops the transcript. Rust reads the file after the
         // elevated child exits — independent of the Start-Process
         // parameter-set restriction.
-        let log_path_pwsh = log_path.display().to_string().replace('\\', "\\\\");
+        //
+        // Path goes inside a PowerShell single-quoted string literal so
+        // backslashes pass through verbatim. We do NOT double-escape them
+        // — that produced invalid paths like 'C:\\Users\\...' on real
+        // Windows in v0.22.5 and broke Start-Transcript silently.
+        // We DO escape any embedded single quotes (rare on Windows paths
+        // but not impossible) by doubling them, which is the standard
+        // PowerShell-single-quote escape.
+        let log_path_pwsh = log_path.display().to_string().replace('\'', "''");
         let payload = format!(
             "Start-Transcript -Path '{}' -Force | Out-Null; \
              try {{ \
