@@ -747,8 +747,9 @@ fn request_grant_system_acl() -> Result<String, String> {
         //      elevated context. If the probe write fails after the grant,
         //      icacls didn't take and we exit non-zero with stderr.
         //
-        // Pause at the end so the user sees the window — no -WindowStyle
-        // Hidden in the outer Start-Process this time.
+        // Window stays fully hidden. Diagnostics are written to the temp
+        // logs which Rust pulls back into the error message if anything
+        // fails. Loud-on-failure, silent-on-success.
         let payload = "\
 $ErrorActionPreference='Stop'; \
 $paths = @('C:\\Program Files\\Common Files\\VST3','C:\\Program Files\\Common Files\\CLAP'); \
@@ -776,31 +777,16 @@ foreach ($p in $paths) {{ \
         Write-Host ('Self-probe write FAILED: ' + $_.Exception.Message) \
     }} \
 }}; \
-if ($failures.Count -gt 0) {{ \
-    Write-Host ''; \
-    Write-Host 'FAILURES:'; \
-    $failures | ForEach-Object {{ Write-Host (' - ' + $_) }}; \
-    Write-Host ''; \
-    Write-Host 'Press Enter to close...'; \
-    Read-Host | Out-Null; \
-    exit 1 \
-}} else {{ \
-    Write-Host ''; \
-    Write-Host 'All grants applied + probes succeeded. Closing in 3 seconds...'; \
-    Start-Sleep -Seconds 3; \
-    exit 0 \
-}}";
+if ($failures.Count -gt 0) {{ exit 1 }} else {{ exit 0 }}";
 
         // Outer powershell launches the elevated child via Start-Process.
-        // -RedirectStandardOutput / -RedirectStandardError pipe the child's
-        // streams into our temp files. We DROP -WindowStyle Hidden so the
-        // user actually sees the window — both for confidence that
-        // something happened and to preserve the diagnostic output if the
-        // child crashes before writing logs.
+        // -WindowStyle Hidden + -RedirectStandardOutput / -RedirectStandard
+        // Error keeps the whole thing silent; diagnostics still land in
+        // the temp logs Rust reads back if the grant doesn't take effect.
         let outer = format!(
             "$p = Start-Process powershell.exe \
-              -ArgumentList @('-NoProfile','-Command',\"& {{ {} }}\") \
-              -Verb RunAs -Wait -PassThru \
+              -ArgumentList @('-NoProfile','-WindowStyle','Hidden','-Command',\"& {{ {} }}\") \
+              -Verb RunAs -Wait -PassThru -WindowStyle Hidden \
               -RedirectStandardOutput '{}' -RedirectStandardError '{}'; \
              exit $p.ExitCode",
             payload.replace("\"", "`\""),
