@@ -726,47 +726,52 @@ fn system_vst3_dir() -> String {
 fn request_grant_system_acl() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        // Resolve the user account name from %USERPROFILE% (works whether
-        // elevated or not — same trick as the installer's acl.rs).
-        let user = std::env::var("USERPROFILE")
-            .ok()
-            .and_then(|p| std::path::PathBuf::from(p).file_name().map(|n| n.to_string_lossy().into_owned()))
-            .ok_or_else(|| "Could not derive Windows username from USERPROFILE".to_string())?;
-
-        // Use %COMPUTERNAME%\<user> to disambiguate from domain accounts on
-        // joined machines. Fall back to bare username if COMPUTERNAME unset.
-        let computer = std::env::var("COMPUTERNAME").unwrap_or_default();
-        let principal = if computer.is_empty() { user.clone() } else { format!("{}\\{}", computer, user) };
-
-        // The PowerShell payload run elevated. Stays simple: just New-Item
-        // (idempotent with -Force) and icacls. Returns icacls's exit code on
-        // failure, 0 on success.
+        // Use the well-known SID for BUILTIN\Users (S-1-5-32-545). Every
+        // local non-admin account is a member, the SID is identical on every
+        // Windows install regardless of language / locale / domain join /
+        // username encoding, and icacls accepts it without any name
+        // resolution. Avoids the entire MACHINENAME\username dance that
+        // failed silently on at least one user's machine in v0.22.1.
         //
-        // No `throw` block: a previous version had `throw "...$p:..."` which
-        // PowerShell tokenizer parses as a drive-qualified variable reference
-        // (the `${drive:name}` syntax) and bombs at parse time with
-        // "Variable reference is not valid". Exiting with the icacls code
-        // via $LASTEXITCODE is simpler and dodges the interpolation trap.
+        // The * prefix tells icacls "this is a SID, not a name" so it skips
+        // LSA name-lookup entirely.
+        let principal = "*S-1-5-32-545";
+
+        // Capture the elevated child's stdout/stderr to temp files so we can
+        // surface the actual icacls error if it fails. Without this redirect
+        // the elevated console output goes to the void and Rust sees only
+        // "exit code 1, stderr empty".
+        let temp_dir = std::env::temp_dir();
+        let stdout_log = temp_dir.join("hardwave-acl-grant.out.log");
+        let stderr_log = temp_dir.join("hardwave-acl-grant.err.log");
+        // Best-effort wipe before we start; if these have content from a
+        // prior run we'd misattribute the message.
+        let _ = std::fs::remove_file(&stdout_log);
+        let _ = std::fs::remove_file(&stderr_log);
+
         let payload = format!(
             "$ErrorActionPreference='Stop'; \
              $paths = @('C:\\Program Files\\Common Files\\VST3','C:\\Program Files\\Common Files\\CLAP'); \
              foreach ($p in $paths) {{ \
                if (-not (Test-Path $p)) {{ New-Item -ItemType Directory -Force -Path $p | Out-Null }}; \
-               & icacls $p /grant '{}:(OI)(CI)(M)' /T /Q | Out-Null; \
+               & icacls $p /grant '{}:(OI)(CI)(M)' /T /Q; \
                if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }} \
              }}; exit 0",
-            principal.replace("'", "''")
+            principal
         );
 
-        // Outer powershell.exe (non-elevated) calls Start-Process to launch
-        // an elevated powershell.exe. -Wait so we can read the exit code.
-        // -WindowStyle Hidden so no console window flashes.
+        // Outer powershell launches the elevated child via Start-Process.
+        // -RedirectStandardOutput / -RedirectStandardError pipe the child's
+        // streams into our temp files so we can read them after -Wait.
         let outer = format!(
             "$p = Start-Process powershell.exe \
               -ArgumentList @('-NoProfile','-WindowStyle','Hidden','-Command',\"& {{ {} }}\") \
-              -Verb RunAs -Wait -PassThru -WindowStyle Hidden; \
+              -Verb RunAs -Wait -PassThru -WindowStyle Hidden \
+              -RedirectStandardOutput '{}' -RedirectStandardError '{}'; \
              exit $p.ExitCode",
-            payload.replace("\"", "`\"")
+            payload.replace("\"", "`\""),
+            stdout_log.display().to_string().replace('\\', "\\\\"),
+            stderr_log.display().to_string().replace('\\', "\\\\"),
         );
 
         let out = std::process::Command::new("powershell.exe")
@@ -777,17 +782,43 @@ fn request_grant_system_acl() -> Result<String, String> {
             .output()
             .map_err(|e| format!("Failed to spawn powershell: {}", e))?;
 
-        // Exit code 1223 (0x4C7) = ERROR_CANCELLED — user clicked No on UAC.
-        // Exit code 0 = icacls succeeded on both paths.
-        // Anything else = something broke; bubble stderr up.
+        // Helper that pulls the elevated child's stdout + stderr together so
+        // a failure message includes whatever icacls actually printed.
+        let read_logs = || -> String {
+            let so = std::fs::read_to_string(&stdout_log).unwrap_or_default();
+            let se = std::fs::read_to_string(&stderr_log).unwrap_or_default();
+            let mut combined = String::new();
+            if !se.trim().is_empty() {
+                combined.push_str("stderr: ");
+                combined.push_str(se.trim());
+            }
+            if !so.trim().is_empty() {
+                if !combined.is_empty() { combined.push_str(" | "); }
+                combined.push_str("stdout: ");
+                combined.push_str(so.trim());
+            }
+            // Also surface outer powershell's own stderr if there is one.
+            let outer_err = String::from_utf8_lossy(&out.stderr).to_string();
+            if !outer_err.trim().is_empty() {
+                if !combined.is_empty() { combined.push_str(" | "); }
+                combined.push_str("outer: ");
+                combined.push_str(outer_err.trim());
+            }
+            if combined.is_empty() { "(no diagnostic output)".into() } else { combined }
+        };
+
         match out.status.code() {
             Some(0) => Ok("granted".into()),
             Some(1223) => Ok("declined".into()),
-            Some(code) => {
-                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                Err(format!("Elevation grant failed with exit code {}: {}", code, stderr.trim()))
-            }
-            None => Err("powershell terminated without an exit code".into()),
+            Some(code) => Err(format!(
+                "Elevation grant failed with exit code {}: {}",
+                code,
+                read_logs()
+            )),
+            None => Err(format!(
+                "powershell terminated without an exit code; {}",
+                read_logs()
+            )),
         }
     }
     #[cfg(not(target_os = "windows"))]
