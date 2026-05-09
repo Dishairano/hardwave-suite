@@ -726,94 +726,127 @@ fn system_vst3_dir() -> String {
 fn request_grant_system_acl() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        // Diagnostics are captured by the elevated child writing to a
-        // transcript log itself — NOT via Start-Process's
-        // -RedirectStandardOutput/Error parameters. Those parameters live in
-        // a different parameter set than -Verb RunAs (because Windows
-        // ShellExecute doesn't pipe stdout/stderr through UAC), and
-        // combining them produces "Parameter set cannot be resolved" — the
-        // bug that broke v0.22.2..v0.22.4: PowerShell rejected the
-        // command, no elevated process ever ran, icacls never ran, ACL
-        // never changed, but the outer exited 0 anyway because
-        // `exit $null.ExitCode` is `exit 0`.
+        // v0.22.6 still failed with empty diagnostics because the inner
+        // PowerShell script was passed as a string-in-a-string-in-a-string,
+        // and the outer double-quoted wrapper interpolated $_ at parse time
+        // before the inner script ever ran. Inner script bombed on a parse
+        // error before Start-Transcript could fire, so the log file was
+        // never created.
+        //
+        // Fix: write the inner script to a .ps1 file and spawn the elevated
+        // child with -File <path>. PowerShell reads the file as-is, no
+        // string-quoting layers to escape through. Same approach also lets
+        // the inner script use $_ etc. naturally.
         let temp_dir = std::env::temp_dir();
+        let script_path = temp_dir.join("hardwave-acl-grant.ps1");
         let log_path = temp_dir.join("hardwave-acl-grant.log");
+        let _ = std::fs::remove_file(&script_path);
         let _ = std::fs::remove_file(&log_path);
 
-        // The elevated payload starts a transcript that captures every
-        // stream (stdout, stderr, Write-Host, errors), runs the grants,
-        // then stops the transcript. Rust reads the file after the
-        // elevated child exits — independent of the Start-Process
-        // parameter-set restriction.
-        //
-        // Path goes inside a PowerShell single-quoted string literal so
-        // backslashes pass through verbatim. We do NOT double-escape them
-        // — that produced invalid paths like 'C:\\Users\\...' on real
-        // Windows in v0.22.5 and broke Start-Transcript silently.
-        // We DO escape any embedded single quotes (rare on Windows paths
-        // but not impossible) by doubling them, which is the standard
-        // PowerShell-single-quote escape.
+        // Build the script body as a clean .ps1 — no Rust-side double-quote
+        // escaping concerns. The script writes its own log via [IO.File]
+        // calls (more reliable than Start-Transcript on locked-down
+        // machines where transcript creation fails silently) and exits with
+        // a code Rust can interpret.
         let log_path_pwsh = log_path.display().to_string().replace('\'', "''");
-        let payload = format!(
-            "Start-Transcript -Path '{}' -Force | Out-Null; \
-             try {{ \
-                 $ErrorActionPreference='Stop'; \
-                 $paths = @('C:\\Program Files\\Common Files\\VST3','C:\\Program Files\\Common Files\\CLAP'); \
-                 $user = $env:USERNAME; \
-                 $grantSid = '*S-1-5-32-545:(OI)(CI)(M)'; \
-                 $grantUser = ($user + ':(OI)(CI)(M)'); \
-                 $failures = @(); \
-                 foreach ($p in $paths) {{ \
-                     Write-Host ('--- ' + $p + ' ---'); \
-                     if (-not (Test-Path $p)) {{ New-Item -ItemType Directory -Force -Path $p | Out-Null; Write-Host ('Created ' + $p) }}; \
-                     & icacls $p /grant $grantSid /T; \
-                     Write-Host ('icacls grant SID exit code: ' + $LASTEXITCODE); \
-                     & icacls $p /grant $grantUser /T; \
-                     Write-Host ('icacls grant USER exit code: ' + $LASTEXITCODE); \
-                     Write-Host ''; \
-                     Write-Host 'Get-Acl after grant:'; \
-                     Get-Acl $p | Format-List | Out-String -Width 200 | Write-Host; \
-                     $probe = Join-Path $p '.hardwave-probe'; \
-                     try {{ \
-                         Set-Content -Path $probe -Value 'hardwave-grant-probe' -Force; \
-                         Remove-Item $probe -Force -ErrorAction SilentlyContinue; \
-                         Write-Host ('Self-probe write SUCCESS at ' + $probe) \
-                     }} catch {{ \
-                         $failures += ('self-probe write failed at ' + $probe + ': ' + $_.Exception.Message); \
-                         Write-Host ('Self-probe write FAILED: ' + $_.Exception.Message) \
-                     }} \
-                 }}; \
-                 if ($failures.Count -gt 0) {{ \
-                     Stop-Transcript | Out-Null; \
-                     exit 1 \
-                 }} else {{ \
-                     Stop-Transcript | Out-Null; \
-                     exit 0 \
-                 }} \
-             }} catch {{ \
-                 Write-Host ('FATAL: ' + $_.Exception.Message); \
-                 try {{ Stop-Transcript | Out-Null }} catch {{ }}; \
-                 exit 99 \
-             }}",
-            log_path_pwsh
+        let script_body = format!(
+            r#"# Elevated ACL grant — run by request_grant_system_acl Tauri command.
+# Logs to a fixed path that the parent Rust process reads after exit.
+$logFile = '{log}'
+function Log([string]$msg) {{
+    try {{ [IO.File]::AppendAllText($logFile, ($msg + [Environment]::NewLine)) }} catch {{ }}
+}}
+# Wipe any stale log and start fresh.
+try {{ if (Test-Path $logFile) {{ Remove-Item $logFile -Force }} }} catch {{ }}
+Log ("=== hardwave-acl-grant " + (Get-Date).ToString('o') + " ===")
+Log ("user: " + $env:USERNAME + "  pid: " + $PID + "  is-admin context: " +
+    (([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)))
+
+$paths = @('C:\Program Files\Common Files\VST3','C:\Program Files\Common Files\CLAP')
+$grantSid = '*S-1-5-32-545:(OI)(CI)(M)'
+$grantUser = ($env:USERNAME + ':(OI)(CI)(M)')
+$failures = @()
+
+foreach ($p in $paths) {{
+    Log ("--- " + $p + " ---")
+    if (-not (Test-Path $p)) {{
+        try {{
+            New-Item -ItemType Directory -Force -Path $p | Out-Null
+            Log ("Created " + $p)
+        }} catch {{
+            Log ("Failed to create directory: " + $_.Exception.Message)
+            $failures += ("create-dir failed: " + $p)
+            continue
+        }}
+    }}
+
+    # SID grant
+    $sidOut = & icacls $p /grant $grantSid /T 2>&1
+    Log ("icacls SID exit=" + $LASTEXITCODE)
+    $sidOut | ForEach-Object {{ Log ("  " + $_) }}
+
+    # Username grant (belt and braces)
+    $userOut = & icacls $p /grant $grantUser /T 2>&1
+    Log ("icacls USER exit=" + $LASTEXITCODE)
+    $userOut | ForEach-Object {{ Log ("  " + $_) }}
+
+    # ACL after grant
+    Log ""
+    Log "ACEs after grant:"
+    try {{
+        (Get-Acl $p).Access | ForEach-Object {{
+            Log ("  " + $_.IdentityReference + "  " + $_.FileSystemRights + "  " + $_.AccessControlType)
+        }}
+    }} catch {{
+        Log ("Get-Acl failed: " + $_.Exception.Message)
+    }}
+
+    # Self-probe inside elevated context (proves icacls actually applied,
+    # not just exited 0). The non-elevated post-grant probe in Rust
+    # validates that the grant reached our user.
+    $probe = Join-Path $p '.hardwave-probe'
+    try {{
+        Set-Content -Path $probe -Value 'hardwave-grant-probe' -Force -ErrorAction Stop
+        Remove-Item $probe -Force -ErrorAction SilentlyContinue
+        Log ("Self-probe SUCCESS at " + $probe)
+    }} catch {{
+        Log ("Self-probe FAILED: " + $_.Exception.Message)
+        $failures += ("self-probe failed at " + $probe + ": " + $_.Exception.Message)
+    }}
+}}
+
+Log ""
+if ($failures.Count -gt 0) {{
+    Log ("FAILURES (" + $failures.Count + "):")
+    $failures | ForEach-Object {{ Log ("  - " + $_) }}
+    exit 1
+}} else {{
+    Log "All grants applied + probes succeeded."
+    exit 0
+}}
+"#,
+            log = log_path_pwsh
         );
 
-        // Outer Start-Process uses ONLY parameters compatible with -Verb
-        // RunAs: -ArgumentList, -Wait, -PassThru, -WindowStyle. No stream
-        // redirection (incompatible with UAC's ShellExecute path). The
-        // transcript inside the inner script is how we get the diagnostics.
-        // $LASTEXITCODE is set after a Start-Process -Wait -PassThru via
-        // $p.ExitCode, but we explicitly set $ErrorActionPreference=Stop on
-        // the outer too so any Start-Process failure terminates the outer
-        // with non-zero exit instead of silently exiting 0.
+        // Write the script to disk. If this fails we surface the IO error
+        // up to the caller — no point starting elevation if the script
+        // file can't be created.
+        if let Err(e) = std::fs::write(&script_path, &script_body) {
+            return Err(format!("Failed to write elevated script: {}", e));
+        }
+
+        // Outer Start-Process: powershell.exe -ExecutionPolicy Bypass
+        // -File <script> -Verb RunAs. -File reads the script verbatim
+        // from disk, eliminating every nested-string-escape concern.
+        let script_path_pwsh = script_path.display().to_string().replace('\'', "''");
         let outer = format!(
             "$ErrorActionPreference='Stop'; \
              $p = Start-Process powershell.exe \
-              -ArgumentList @('-NoProfile','-WindowStyle','Hidden','-Command',\"& {{ {} }}\") \
+              -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File','{}') \
               -Verb RunAs -Wait -PassThru -WindowStyle Hidden; \
              if ($null -eq $p) {{ exit 90 }}; \
              exit $p.ExitCode",
-            payload.replace("\"", "`\""),
+            script_path_pwsh,
         );
 
         let out = std::process::Command::new("powershell.exe")
@@ -823,6 +856,10 @@ fn request_grant_system_acl() -> Result<String, String> {
             .arg(&outer)
             .output()
             .map_err(|e| format!("Failed to spawn powershell: {}", e))?;
+
+        // Best-effort cleanup of the .ps1 — leave the log file in place
+        // so a curious user can find it at %TEMP%\hardwave-acl-grant.log.
+        let _ = std::fs::remove_file(&script_path);
 
         // Pull the elevated transcript (which contains everything the
         // child wrote — Write-Host, stderr, errors, you name it) plus
