@@ -150,6 +150,34 @@ fn vst3_dir() -> std::path::PathBuf {
         .unwrap_or_else(default_vst3_dir)
 }
 
+fn default_clap_dir() -> std::path::PathBuf {
+    // Per-user CLAP paths, mirroring default_vst3_dir(). DAWs scan these in
+    // addition to the system CLAP folder. The old code never wrote a .clap
+    // into a real CLAP folder (it dumped it in the VST3 dir), so CLAP users
+    // never received updates — the "plugin still shows the old version" bug.
+    #[cfg(target_os = "windows")]
+    {
+        dirs::data_local_dir()
+            .map(|p| p.join("Programs").join("Common").join("CLAP"))
+            .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Program Files\Common Files\CLAP"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        dirs::home_dir()
+            .map(|p| p.join("Library").join("Audio").join("Plug-Ins").join("CLAP"))
+            .unwrap_or_else(|| std::path::PathBuf::from("/Library/Audio/Plug-Ins/CLAP"))
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    { dirs::home_dir().unwrap_or_default().join(".clap") }
+}
+
+fn clap_dir() -> std::path::PathBuf {
+    let settings = read_settings();
+    settings.get("clap_path")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(default_clap_dir)
+}
+
 /// Copy a directory tree using an elevated process (UAC prompt on Windows).
 #[cfg(target_os = "windows")]
 fn copy_elevated(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
@@ -559,6 +587,35 @@ async fn download_and_install(
             }
         }
 
+        // Also place the CLAP build in the real CLAP folder. The release zip
+        // ships both a .vst3 and a .clap; the copy above lands everything in the
+        // VST3 dir, so without this the DAW's CLAP scanner never sees the new
+        // build — that's the "still shows the old version" bug. Additive and
+        // best-effort: never fails the (already-succeeded) VST3 install.
+        if matches!(category.as_str(), "vst" | "vst3") {
+            let cdir = clap_dir();
+            if let Ok(rd) = std::fs::read_dir(&staging_dir) {
+                for entry in rd.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if !name.to_lowercase().ends_with(".clap") { continue; }
+                    let _ = std::fs::create_dir_all(&cdir);
+                    let dest = cdir.join(&name);
+                    let res = if entry.path().is_dir() {
+                        copy_dir_all(&entry.path(), &dest)
+                    } else {
+                        std::fs::copy(entry.path(), &dest).map(|_| ()).map_err(|e| e.to_string())
+                    };
+                    #[cfg(target_os = "windows")]
+                    if let Err(e) = &res {
+                        if e.contains("Access is denied") || e.contains("os error 5") {
+                            let _ = copy_elevated(&entry.path(), &dest);
+                        }
+                    }
+                    let _ = res;
+                }
+            }
+        }
+
         let _ = std::fs::remove_dir_all(&staging_dir);
     } else {
         // Not an archive — copy single file
@@ -605,7 +662,8 @@ async fn uninstall_plugin(slug: String, category: String) -> Result<(), String> 
             let vst = vst3_dir();
             vec![
                 vst.join(format!("{}.vst3", bundle_name)),
-                vst.join(format!("{}.clap", bundle_name)),
+                vst.join(format!("{}.clap", bundle_name)),       // legacy: old builds mislocated the CLAP in the VST3 dir
+                clap_dir().join(format!("{}.clap", bundle_name)), // real CLAP folder
             ]
         }
         _ => {
