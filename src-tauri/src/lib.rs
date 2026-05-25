@@ -178,6 +178,94 @@ fn clap_dir() -> std::path::PathBuf {
         .unwrap_or_else(default_clap_dir)
 }
 
+#[derive(serde::Serialize)]
+struct StalePlugin {
+    path: String,
+    name: String,
+    format: String, // "VST3" | "CLAP"
+    scope: String,  // "per-user" | "system" | "configured"
+}
+
+/// Every standard folder a DAW might scan for plug-ins. Used by the
+/// "Clean old versions" repair to find leftover Hardwave copies that make a
+/// DAW load a stale build.
+fn all_plugin_dirs() -> Vec<(std::path::PathBuf, &'static str, &'static str)> {
+    let mut v: Vec<(std::path::PathBuf, &'static str, &'static str)> = vec![
+        (vst3_dir(), "VST3", "configured"),
+        (default_vst3_dir(), "VST3", "per-user"),
+        (clap_dir(), "CLAP", "configured"),
+        (default_clap_dir(), "CLAP", "per-user"),
+    ];
+    #[cfg(target_os = "windows")]
+    {
+        v.push((std::path::PathBuf::from(r"C:\Program Files\Common Files\VST3"), "VST3", "system"));
+        v.push((std::path::PathBuf::from(r"C:\Program Files\Common Files\CLAP"), "CLAP", "system"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        v.push((std::path::PathBuf::from("/Library/Audio/Plug-Ins/VST3"), "VST3", "system"));
+        v.push((std::path::PathBuf::from("/Library/Audio/Plug-Ins/CLAP"), "CLAP", "system"));
+    }
+    v
+}
+
+/// A path is only ever eligible for removal if it's a `hardwave-*.vst3`/`.clap`
+/// living directly inside one of the known plug-in dirs. Belt-and-braces so the
+/// repair can never delete something it shouldn't.
+fn is_removable_hardwave_plugin(path: &std::path::Path) -> bool {
+    let fname = match path.file_name() {
+        Some(f) => f.to_string_lossy().to_lowercase(),
+        None => return false,
+    };
+    if !fname.starts_with("hardwave-") { return false; }
+    if !(fname.ends_with(".vst3") || fname.ends_with(".clap")) { return false; }
+    let parent = match path.parent() { Some(p) => p, None => return false };
+    all_plugin_dirs().iter().any(|(d, _, _)| d == parent)
+}
+
+#[tauri::command]
+fn scan_stale_plugins() -> Vec<StalePlugin> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (dir, format, scope) in all_plugin_dirs() {
+        let rd = match std::fs::read_dir(&dir) { Ok(r) => r, Err(_) => continue };
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let lname = name.to_lowercase();
+            if !lname.starts_with("hardwave-") { continue; }
+            if !(lname.ends_with(".vst3") || lname.ends_with(".clap")) { continue; }
+            let key = entry.path().to_string_lossy().to_string();
+            if !seen.insert(key.clone()) { continue; }
+            out.push(StalePlugin { path: key, name, format: format.to_string(), scope: scope.to_string() });
+        }
+    }
+    out
+}
+
+#[tauri::command]
+fn remove_stale_plugins(paths: Vec<String>) -> Result<Vec<String>, String> {
+    let mut removed = Vec::new();
+    for p in paths {
+        let path = std::path::PathBuf::from(&p);
+        if !is_removable_hardwave_plugin(&path) {
+            return Err(format!("Refused — not a Hardwave plug-in in a known folder: {}", p));
+        }
+        if !path.exists() { continue; }
+        let res = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+        match res {
+            Ok(()) => removed.push(p),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("os error 32") || msg.contains("being used by another process") {
+                    return Err("A plug-in file is in use. Close your DAW and try again.".into());
+                }
+                return Err(format!("{}: {}", p, msg));
+            }
+        }
+    }
+    Ok(removed)
+}
+
 /// Copy a directory tree using an elevated process (UAC prompt on Windows).
 #[cfg(target_os = "windows")]
 fn copy_elevated(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
@@ -1425,6 +1513,8 @@ pub fn run() {
             download_and_install,
             get_installed_versions,
             uninstall_plugin,
+            scan_stale_plugins,
+            remove_stale_plugins,
             open_install_folder,
             get_install_paths,
             set_install_path,

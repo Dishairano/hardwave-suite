@@ -117,6 +117,25 @@ export async function uninstallPlugin(slug: string, category: string): Promise<v
   return invoke('uninstall_plugin', { slug, category })
 }
 
+export interface StalePlugin {
+  path: string
+  name: string
+  format: string // "VST3" | "CLAP"
+  scope: string  // "per-user" | "system" | "configured"
+}
+
+/** Read-only: lists every hardwave-* plug-in copy found across the standard
+ *  VST3 + CLAP folders (per-user + system). Used by "Clean old versions". */
+export async function scanStalePlugins(): Promise<StalePlugin[]> {
+  return invoke('scan_stale_plugins')
+}
+
+/** Removes the given plug-in paths. The backend refuses anything that isn't a
+ *  hardwave-*.vst3/.clap inside a known plug-in folder. Returns the paths removed. */
+export async function removeStalePlugins(paths: string[]): Promise<string[]> {
+  return invoke('remove_stale_plugins', { paths })
+}
+
 export async function openInstallFolder(category: string): Promise<void> {
   return invoke('open_install_folder', { category })
 }

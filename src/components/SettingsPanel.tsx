@@ -381,6 +381,84 @@ function PathsTab({
       <p className="text-[11px] text-zinc-600 mt-6 leading-relaxed">
         Changes apply to future installs. Already installed plugins stay in their current location.
       </p>
+      <CleanOldVersions />
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────
+// CleanOldVersions — scans every standard VST3 + CLAP folder for leftover
+// hardwave-* copies and removes the ones the user selects. A DAW loads
+// whatever copy it finds first, so old leftovers are the usual cause of a
+// plug-in showing the wrong version. Read-only scan; nothing is deleted until
+// the user picks files and clicks Remove. The backend refuses any path that
+// isn't a hardwave-*.vst3/.clap inside a known plug-in folder.
+function CleanOldVersions() {
+  const [items, setItems] = useState<api.StalePlugin[] | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+
+  const scan = async () => {
+    setBusy(true); setMsg(null)
+    try {
+      const found = await api.scanStalePlugins()
+      setItems(found)
+      setSelected(new Set(found.map((f) => f.path)))
+      if (found.length === 0) setMsg('No Hardwave plug-in files found.')
+    } catch (e) { setMsg(String(e)) } finally { setBusy(false) }
+  }
+
+  const toggle = (p: string) => setSelected((s) => {
+    const n = new Set(s)
+    if (n.has(p)) n.delete(p); else n.add(p)
+    return n
+  })
+
+  const remove = async () => {
+    const paths = [...selected]
+    if (paths.length === 0) return
+    setBusy(true); setMsg(null)
+    try {
+      const removed = await api.removeStalePlugins(paths)
+      setMsg(`Removed ${removed.length} file(s). Reinstall the latest build, then rescan plug-ins in your DAW.`)
+      await scan()
+    } catch (e) { setMsg(String(e)) } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="mt-8 pt-6 border-t border-white/[0.06]">
+      <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Clean old versions</h3>
+      <p className="text-[11px] text-zinc-600 leading-relaxed mb-3">
+        Finds leftover Hardwave plug-in files across all plug-in folders. Old copies are the usual cause of a plug-in showing the wrong version. Close your DAW before removing.
+      </p>
+      <button
+        onClick={scan}
+        disabled={busy}
+        className="px-3 py-2 text-xs font-medium rounded-md bg-white/[0.06] hover:bg-white/[0.1] text-white transition-colors disabled:opacity-50"
+      >
+        {busy ? 'Working…' : 'Scan for old versions'}
+      </button>
+      {items && items.length > 0 && (
+        <div className="mt-3 space-y-1.5">
+          {items.map((it) => (
+            <label key={it.path} className="flex items-center gap-2.5 text-[11px] text-zinc-300 cursor-pointer">
+              <input type="checkbox" checked={selected.has(it.path)} onChange={() => toggle(it.path)} className="accent-red-600" />
+              <span className="font-mono text-zinc-200">{it.name}</span>
+              <span className="px-1.5 py-0.5 rounded bg-white/[0.06] text-zinc-400">{it.format}</span>
+              <span className="text-zinc-600">{it.scope}</span>
+            </label>
+          ))}
+          <button
+            onClick={remove}
+            disabled={busy || selected.size === 0}
+            className="mt-2 px-3 py-2 text-xs font-medium rounded-md bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-50"
+          >
+            Remove selected ({selected.size})
+          </button>
+        </div>
+      )}
+      {msg && <p className="mt-3 text-[11px] text-zinc-400 leading-relaxed">{msg}</p>}
     </div>
   )
 }
