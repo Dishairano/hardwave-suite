@@ -279,6 +279,17 @@ fn scan_stale_plugins() -> Vec<StalePlugin> {
     out
 }
 
+/// True if a path contains a character that could break out of the double-quoted
+/// argument in an elevated cmd/PowerShell command we build by string
+/// interpolation. A legitimate plug-in path never contains these; refusing them
+/// closes any quote-breakout / command-injection vector BEFORE we run with admin
+/// rights. Shared by every elevated path we construct (remove_path_elevated,
+/// copy_elevated, uninstall_plugin's rmdir).
+#[cfg(target_os = "windows")]
+fn path_has_shell_meta(p: &str) -> bool {
+    p.contains(|c: char| matches!(c, '"' | '&' | '|' | '<' | '>' | '^' | '%' | '`' | '\n' | '\r'))
+}
+
 /// Remove a single plug-in path with an elevation (UAC) prompt on Windows.
 /// Mirrors `uninstall_plugin`'s elevated fallback: a directory bundle (.vst3, or
 /// a macOS .clap) goes via `rmdir /s /q`, a plain file (.clap on Windows) via
@@ -288,11 +299,8 @@ fn scan_stale_plugins() -> Vec<StalePlugin> {
 fn remove_path_elevated(path: &std::path::Path) -> Result<(), String> {
     let p = path.to_string_lossy();
     // Defense-in-depth before running with admin rights: refuse any path with a
-    // shell-significant character. A legitimate plug-in path never contains
-    // these, and the existing exists()-gate + Windows' ban on '"' in filenames
-    // already make a cmd-quote breakout unreachable — but we never want elevated
-    // command construction to depend on that subtlety. Belt and braces.
-    if p.contains(|c: char| matches!(c, '"' | '&' | '|' | '<' | '>' | '^' | '%' | '`' | '\n' | '\r')) {
+    // shell-significant character (see path_has_shell_meta).
+    if path_has_shell_meta(&p) {
         return Err("refusing to remove a path containing unsafe characters".into());
     }
     let inner = if path.is_dir() {
@@ -465,6 +473,11 @@ fn sweep_other_copies(
 fn copy_elevated(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
     let src_s = src.to_string_lossy();
     let dest_s = dest.to_string_lossy();
+    // Defense-in-depth: never let a path with shell-significant characters reach
+    // the elevated xcopy command. dest derives from the user-settable vst3_path.
+    if path_has_shell_meta(&src_s) || path_has_shell_meta(&dest_s) {
+        return Err("refusing to copy to/from a path containing unsafe characters".into());
+    }
     // Use xcopy instead of robocopy — simpler exit codes (0 = success)
     let ps_cmd = format!(
         "Start-Process -FilePath 'xcopy.exe' -ArgumentList '\"{}\" \"{}\" /E /I /Y /Q' -Verb RunAs -Wait",
@@ -867,6 +880,9 @@ async fn download_and_install(
             if e.contains("os error 32") || e.contains("being used by another process") {
                 return Err("The plugin file is in use. Please close your DAW (e.g. FL Studio, Ableton) and try again.".into());
             }
+            // `mut` is used only on Windows (the elevated-copy branch below);
+            // on other targets that branch is cfg'd out, so allow unused_mut.
+            #[allow(unused_mut)]
             let mut recovered = false;
             #[cfg(target_os = "windows")]
             {
@@ -878,6 +894,26 @@ async fn download_and_install(
                 }
             }
             if !recovered {
+                // A non-atomic copy_dir_all can leave a HALF-WRITTEN bundle in
+                // install_dir (e.g. AV locks one inner file mid-copy). Since the
+                // default install_dir is the system folder FL scans — and the
+                // sweep protects it — a corrupt partial would be loaded by FL and
+                // never cleaned. Remove just our own bundle entries from
+                // install_dir (never the shared folder itself) before falling
+                // back. Best-effort: if the dir was never writable, nothing was
+                // written and this is a no-op.
+                if let Ok(rd) = std::fs::read_dir(&staging_dir) {
+                    for ent in rd.flatten() {
+                        let leftover = install_dir.join(ent.file_name());
+                        if leftover.exists() && is_removable_hardwave_plugin(&leftover) {
+                            let _ = if leftover.is_dir() {
+                                std::fs::remove_dir_all(&leftover)
+                            } else {
+                                std::fs::remove_file(&leftover)
+                            };
+                        }
+                    }
+                }
                 // Graceful fallback for VST installs: drop into the per-user
                 // folder, which never needs elevation. The user can grant System
                 // access later (Settings → Paths) to also install there.
@@ -960,18 +996,18 @@ async fn download_and_install(
                 .filter(|n| { let l = n.to_lowercase(); l.ends_with(".vst3") || l.ends_with(".clap") })
                 .cloned()
                 .collect();
-            // Protect EVERY standard folder from the sweep, not just the primary
-            // install target. We now write the current build into both the
-            // system and per-user standard folders, so the sweep must never
-            // remove a copy from any of them — otherwise it could orphan a host
-            // that scans a different standard folder than the one we installed
-            // into (exactly the "FL can't find it" regression). The sweep is
-            // thus left to clean only NON-standard / custom / legacy leftovers.
+            // Protect exactly the folders this install ACTUALLY wrote the current
+            // build into — the primary target (effective_install_dir, == the
+            // system folder by default, or per-user after a fallback), the CLAP
+            // target, and the two per-user mirror targets. The sweep then cleans
+            // every OTHER copy, including a stale one in a standard folder we did
+            // NOT write this time (e.g. an old system copy left over when the user
+            // has a custom vst3_path). Protecting a folder we didn't write would
+            // preserve a stale build there — and on the system folder that's the
+            // "FL still loads the old version" regression. So: protect-what-you-wrote.
             let standard_dirs = [
                 effective_install_dir.clone(), clap_dir(),
                 default_vst3_dir(), default_clap_dir(),
-                std::path::PathBuf::from(system_vst3_dir()),
-                std::path::PathBuf::from(system_clap_dir()),
             ];
             let mut keep: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
             for name in &bundle_files {
@@ -1073,10 +1109,14 @@ async fn uninstall_plugin(slug: String, category: String) -> Result<(), String> 
         {
             // Try elevated removal on Windows
             for path in &dirs_to_remove {
-                if path.exists() {
+                let path_s = path.to_string_lossy();
+                // Same injection guard as the other elevated paths — skip any
+                // path with shell-significant characters rather than run it as
+                // admin.
+                if path.exists() && !path_has_shell_meta(&path_s) {
                     let ps = format!(
                         "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c rmdir /s /q \"{}\"' -Verb RunAs -Wait",
-                        path.to_string_lossy()
+                        path_s
                     );
                     let _ = std::process::Command::new("powershell")
                         .args(["-NoProfile", "-Command", &ps])
@@ -1138,17 +1178,6 @@ fn system_vst3_dir() -> String {
     { String::from("/Library/Audio/Plug-Ins/VST3") }
     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
     { String::from("/usr/lib/vst3") }
-}
-
-/// The canonical system CLAP path on this platform — mirror of system_vst3_dir.
-/// Used to protect the system CLAP folder from the install-time sweep.
-fn system_clap_dir() -> String {
-    #[cfg(target_os = "windows")]
-    { String::from(r"C:\Program Files\Common Files\CLAP") }
-    #[cfg(target_os = "macos")]
-    { String::from("/Library/Audio/Plug-Ins/CLAP") }
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    { String::from("/usr/lib/clap") }
 }
 
 /// Request elevation and grant the current user (OI)(CI)(M) Modify rights on
