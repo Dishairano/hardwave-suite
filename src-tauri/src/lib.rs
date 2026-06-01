@@ -266,6 +266,79 @@ fn remove_stale_plugins(paths: Vec<String>) -> Result<Vec<String>, String> {
     Ok(removed)
 }
 
+/// Remove copies of a just-installed plug-in bundle that linger in OTHER
+/// folders a DAW scans (system dir, a previously-configured per-user dir, …).
+/// `keep` holds the paths we just wrote — the fresh install — so they're never
+/// touched. Returns (removed, blocked); `blocked` are copies we couldn't delete,
+/// almost always because the DAW currently has them loaded. Best-effort by
+/// design: the caller's install has already succeeded, so a locked leftover is
+/// reported, never fatal. Reuses `is_removable_hardwave_plugin` so it can only
+/// ever delete a `hardwave-*.vst3`/`.clap` sitting directly in a known dir.
+/// Append-only audit trail for the auto-sweep's irreversible deletes, so support
+/// can see exactly what a sweep removed (or failed to remove) on a customer
+/// machine. Best-effort: a logging failure must never block or fail the
+/// already-successful install.
+fn append_sweep_log(action: &str, path: &str) {
+    use std::io::Write;
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let dir = data_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("sweep.log")) {
+        let _ = writeln!(f, "{}\t{}\t{}", secs, action, path);
+    }
+}
+
+fn sweep_other_copies(
+    bundle_files: &[String],
+    keep: &std::collections::HashSet<std::path::PathBuf>,
+) -> (Vec<String>, Vec<String>) {
+    let mut removed = Vec::new();
+    let mut blocked = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (dir, _, _) in all_plugin_dirs() {
+        for name in bundle_files {
+            let candidate = dir.join(name);
+            // Never touch the copies we just installed (match raw or canonical).
+            let canon = candidate.canonicalize().ok();
+            if keep.contains(&candidate) || canon.as_ref().map_or(false, |c| keep.contains(c)) {
+                continue;
+            }
+            // De-dup: the same physical file can surface via two dir aliases
+            // (e.g. configured dir == default dir when unset).
+            let dedup_key = canon.unwrap_or_else(|| candidate.clone());
+            if !seen.insert(dedup_key) { continue; }
+            if !candidate.exists() { continue; }
+            if !is_removable_hardwave_plugin(&candidate) { continue; }
+            let res = if candidate.is_dir() {
+                std::fs::remove_dir_all(&candidate)
+            } else {
+                std::fs::remove_file(&candidate)
+            };
+            let cand_str = candidate.to_string_lossy().to_string();
+            match res {
+                Ok(()) => {
+                    append_sweep_log("removed", &cand_str);
+                    removed.push(cand_str);
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("os error 32") || msg.contains("being used by another process") {
+                        append_sweep_log("blocked-in-use", &cand_str);
+                        blocked.push(cand_str);
+                    } else {
+                        append_sweep_log("blocked-error", &format!("{}: {}", cand_str, msg));
+                        blocked.push(format!("{}: {}", candidate.display(), msg));
+                    }
+                }
+            }
+        }
+    }
+    (removed, blocked)
+}
+
 /// Copy a directory tree using an elevated process (UAC prompt on Windows).
 #[cfg(target_os = "windows")]
 fn copy_elevated(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
@@ -701,6 +774,38 @@ async fn download_and_install(
                     }
                     let _ = res;
                 }
+            }
+        }
+
+        // Sweep older copies of THIS bundle out of every other folder a DAW
+        // scans. A leftover in the system dir or a previously-configured per-user
+        // dir is exactly why "I updated but it still shows the old version"
+        // happens — the DAW loads whichever copy it finds first. We derive the
+        // bundle's filenames from the staging dir (not the slug), so it works
+        // even when an older Suite UI didn't pass product_slug/version.
+        if matches!(category.as_str(), "vst" | "vst3") {
+            let bundle_files: Vec<String> = staging_entries
+                .iter()
+                .filter(|n| { let l = n.to_lowercase(); l.ends_with(".vst3") || l.ends_with(".clap") })
+                .cloned()
+                .collect();
+            let mut keep: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+            for name in &bundle_files {
+                for p in [install_dir.join(name), clap_dir().join(name)] {
+                    if let Ok(c) = p.canonicalize() { keep.insert(c); }
+                    keep.insert(p);
+                }
+            }
+            let (removed, blocked) = sweep_other_copies(&bundle_files, &keep);
+            if !removed.is_empty() || !blocked.is_empty() {
+                let _ = app.emit(
+                    "dl:cleaned",
+                    serde_json::json!({
+                        "slug": product_slug.clone().unwrap_or_default(),
+                        "removed": removed,
+                        "blocked": blocked,
+                    }),
+                );
             }
         }
 
