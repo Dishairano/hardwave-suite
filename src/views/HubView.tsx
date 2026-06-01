@@ -162,6 +162,8 @@ export function HubView({
   const [downloads, dispatch] = useReducer(dlReducer, {})
   const [installedVersions, setInstalledVersions] = useState<Record<string, string>>(preloadedVersions ?? {})
   const [lastSync, setLastSync] = useState<Date | null>(hasPreloaded ? new Date() : null)
+  const [cleanupBlocked, setCleanupBlocked] = useState<{ slug: string; blocked: api.BlockedCopy[] } | null>(null)
+  const [retryingCleanup, setRetryingCleanup] = useState(false)
 
   const loadProducts = useCallback(async () => {
     setLoading(true)
@@ -187,6 +189,18 @@ export function HubView({
     if (!hasPreloaded) loadProducts()
     else if (lastSync) onLastSyncChange?.(lastSync)
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // After an install, the backend sweeps stale copies from other plug-in
+  // folders. If it couldn't remove one (the DAW has it open, or it's in a system
+  // folder), surface a banner so the user can close their DAW and retry —
+  // otherwise the DAW may keep loading the old build.
+  useEffect(() => {
+    let un: (() => void) | undefined
+    api.onPluginsCleaned((e) => {
+      if (e.blocked && e.blocked.length > 0) setCleanupBlocked({ slug: e.slug, blocked: e.blocked })
+    }).then((u) => { un = u })
+    return () => { un?.() }
   }, [])
 
   const counts = useMemo<HubCounts>(() => {
@@ -224,6 +238,23 @@ export function HubView({
       unlisten()
     }
   }, [])
+
+  const retryCleanup = useCallback(async () => {
+    if (!cleanupBlocked) return
+    setRetryingCleanup(true)
+    try {
+      // remove_stale_plugins elevates (UAC) for system-folder copies and now
+      // succeeds for the in-use ones once the DAW has released them.
+      await api.removeStalePlugins(cleanupBlocked.blocked.map((b) => b.path))
+      setCleanupBlocked(null)
+    } catch (err) {
+      window.alert(
+        `Some old copies still couldn't be removed:\n${String(err)}\n\nMake sure your DAW (e.g. FL Studio, Ableton) is fully closed, then try again.`,
+      )
+    } finally {
+      setRetryingCleanup(false)
+    }
+  }, [cleanupBlocked])
 
   const handleUninstall = useCallback(async (product: Product) => {
     const ok = window.confirm(
@@ -354,6 +385,33 @@ export function HubView({
           </button>
         </div>
       )}
+
+      {cleanupBlocked && (() => {
+        const inUse = cleanupBlocked.blocked.some((b) => b.reason === 'in_use')
+        const name = cleanupBlocked.slug || 'this plug-in'
+        return (
+          <div className="update-banner" style={{ borderColor: 'rgba(245,158,11,0.4)' }}>
+            <AlertCircle className="update-banner-icon" size={18} color="#f59e0b" />
+            <div className="update-banner-body">
+              <strong>An old copy couldn&apos;t be removed.</strong>{' '}
+              {inUse
+                ? `Close your DAW to finish removing an old copy of ${name}, then retry — otherwise your DAW may keep loading the old version.`
+                : `An old copy of ${name} is in a system folder and needs administrator rights to remove.`}
+            </div>
+            <button className="update-banner-btn" onClick={retryCleanup} disabled={retryingCleanup} type="button">
+              {retryingCleanup ? 'Removing…' : inUse ? 'Retry' : 'Remove (admin)'}
+            </button>
+            <button
+              className="update-banner-btn"
+              onClick={() => setCleanupBlocked(null)}
+              type="button"
+              style={{ background: 'transparent', border: '1px solid var(--border, rgba(255,255,255,0.1))' }}
+            >
+              Dismiss
+            </button>
+          </div>
+        )
+      })()}
 
       {products.length === 0 ? (
         <div className="empty-state">

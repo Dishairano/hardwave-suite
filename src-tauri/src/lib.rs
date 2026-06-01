@@ -373,12 +373,23 @@ fn append_sweep_log(action: &str, path: &str) {
 /// and we never silently trigger a UAC prompt mid-update. Reuses
 /// `is_removable_hardwave_plugin` so it can only ever delete a
 /// `hardwave-*.vst3`/`.clap` sitting directly in a known dir.
+/// A stale copy the sweep found but could NOT delete, with a machine-readable
+/// reason so the UI can react: "in_use" (the DAW has it open → close it and
+/// retry), "denied" (a system folder → the user-confirmed cleanup elevates),
+/// or "error" (anything else). The `path` is exactly what `remove_stale_plugins`
+/// accepts for a retry.
+#[derive(serde::Serialize, Clone)]
+struct BlockedCopy {
+    path: String,
+    reason: String,
+}
+
 fn sweep_other_copies(
     bundle_files: &[String],
     keep: &std::collections::HashSet<std::path::PathBuf>,
-) -> (Vec<String>, Vec<String>) {
+) -> (Vec<String>, Vec<BlockedCopy>) {
     let mut removed = Vec::new();
-    let mut blocked = Vec::new();
+    let mut blocked: Vec<BlockedCopy> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for (dir, _, _) in all_plugin_dirs() {
         for name in bundle_files {
@@ -407,13 +418,16 @@ fn sweep_other_copies(
                 }
                 Err(e) => {
                     let msg = e.to_string();
-                    if msg.contains("os error 32") || msg.contains("being used by another process") {
-                        append_sweep_log("blocked-in-use", &cand_str);
-                        blocked.push(cand_str);
+                    let reason = if msg.contains("os error 32") || msg.contains("being used by another process") {
+                        "in_use"
+                    } else if msg.contains("os error 5") || msg.contains("Access is denied")
+                        || msg.contains("Permission denied") || msg.contains("os error 13") {
+                        "denied"
                     } else {
-                        append_sweep_log("blocked-error", &format!("{}: {}", cand_str, msg));
-                        blocked.push(format!("{}: {}", candidate.display(), msg));
-                    }
+                        "error"
+                    };
+                    append_sweep_log(&format!("blocked-{}", reason), &cand_str);
+                    blocked.push(BlockedCopy { path: cand_str, reason: reason.to_string() });
                 }
             }
         }

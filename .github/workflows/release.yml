@@ -233,7 +233,23 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           BASE="https://hardwavestudios.com/downloads/suite"
           DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          NOTES=$(gh release view "${TAG}" --json body -q '.body' 2>/dev/null || echo "Bug fixes and improvements")
+
+          # Release notes: prefer the ANNOTATED TAG MESSAGE — softprops/action-gh-release
+          # does NOT copy it into the release body, which is why the auto-updater
+          # used to show a generic "Bug fixes and improvements". Fall back to any
+          # existing release body, then to the generic line. Also push the result
+          # into the GitHub release body so the release page and the updater
+          # manifest stay in sync.
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null || true
+          NOTES=$(git tag -l --format='%(contents)' "${TAG}" 2>/dev/null)
+          if [ -z "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ]; then
+            NOTES=$(gh release view "${TAG}" --json body -q '.body' 2>/dev/null)
+          fi
+          if [ -z "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ]; then
+            NOTES="Bug fixes and improvements"
+          fi
+          printf '%s\n' "$NOTES" > /tmp/release-notes.md
+          gh release edit "${TAG}" --notes-file /tmp/release-notes.md 2>/dev/null || true
 
           # Read signatures from downloaded assets
           WIN_SIG=$(cat /tmp/release-assets/*.exe.sig 2>/dev/null || echo "")
@@ -245,7 +261,7 @@ jobs:
           import json
           manifest = {
             'version': '${VERSION}',
-            'notes': '''${NOTES}'''.strip() or 'Bug fixes and improvements',
+            'notes': open('/tmp/release-notes.md').read().strip() or 'Bug fixes and improvements',
             'pub_date': '${DATE}',
             'platforms': {
               'windows-x86_64': {

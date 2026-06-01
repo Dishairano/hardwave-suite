@@ -124,6 +124,19 @@ export interface StalePlugin {
   scope: string  // "per-user" | "system" | "configured"
 }
 
+/** A stale copy the install-time sweep found but couldn't delete. */
+export interface BlockedCopy {
+  path: string
+  reason: 'in_use' | 'denied' | 'error'
+}
+
+/** Payload of the `dl:cleaned` event the backend emits after an install sweep. */
+export interface CleanedEvent {
+  slug: string
+  removed: string[]
+  blocked: BlockedCopy[]
+}
+
 /** Read-only: lists every hardwave-* plug-in copy found across the standard
  *  VST3 + CLAP folders (per-user + system). Used by "Clean old versions". */
 export async function scanStalePlugins(): Promise<StalePlugin[]> {
@@ -219,6 +232,16 @@ export async function onDownloadProgress(
   if (!isTauri) return () => {}
   const { listen } = await import('@tauri-apps/api/event')
   return listen<DownloadProgress>('dl:progress', (e) => callback(e.payload))
+}
+
+/** Fires after an install when the sweep removed (and/or couldn't remove) old
+ *  copies of the bundle. `blocked` drives the "close your DAW & retry" prompt. */
+export async function onPluginsCleaned(
+  callback: (e: CleanedEvent) => void,
+): Promise<() => void> {
+  if (!isTauri) return () => {}
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<CleanedEvent>('dl:cleaned', (e) => callback(e.payload))
 }
 
 // Shared auth cookie on .hardwavestudios.com — all webviews + Suite share one session
