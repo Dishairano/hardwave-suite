@@ -219,6 +219,18 @@ fn is_removable_hardwave_plugin(path: &std::path::Path) -> bool {
     };
     if !fname.starts_with("hardwave-") { return false; }
     if !(fname.ends_with(".vst3") || fname.ends_with(".clap")) { return false; }
+    // Reject symlinks / Windows junctions / reparse points. A real plug-in
+    // bundle is never a link; following one would let a recursive delete escape
+    // into an arbitrary target tree — especially dangerous under elevation.
+    if let Ok(md) = std::fs::symlink_metadata(path) {
+        if md.file_type().is_symlink() { return false; }
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+            if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 { return false; }
+        }
+    }
     let parent = match path.parent() { Some(p) => p, None => return false };
     all_plugin_dirs().iter().any(|(d, _, _)| d == parent)
 }
@@ -242,6 +254,44 @@ fn scan_stale_plugins() -> Vec<StalePlugin> {
     out
 }
 
+/// Remove a single plug-in path with an elevation (UAC) prompt on Windows.
+/// Mirrors `uninstall_plugin`'s elevated fallback: a directory bundle (.vst3, or
+/// a macOS .clap) goes via `rmdir /s /q`, a plain file (.clap on Windows) via
+/// `del /q`. Returns Ok only if the path is actually gone afterwards. The caller
+/// must have already validated the path with `is_removable_hardwave_plugin`.
+#[cfg(target_os = "windows")]
+fn remove_path_elevated(path: &std::path::Path) -> Result<(), String> {
+    let p = path.to_string_lossy();
+    // Defense-in-depth before running with admin rights: refuse any path with a
+    // shell-significant character. A legitimate plug-in path never contains
+    // these, and the existing exists()-gate + Windows' ban on '"' in filenames
+    // already make a cmd-quote breakout unreachable — but we never want elevated
+    // command construction to depend on that subtlety. Belt and braces.
+    if p.contains(|c: char| matches!(c, '"' | '&' | '|' | '<' | '>' | '^' | '%' | '`' | '\n' | '\r')) {
+        return Err("refusing to remove a path containing unsafe characters".into());
+    }
+    let inner = if path.is_dir() {
+        format!("rmdir /s /q \"{}\"", p)
+    } else {
+        format!("del /q \"{}\"", p)
+    };
+    let ps = format!(
+        "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c {}' -Verb RunAs -Wait",
+        inner
+    );
+    // The exit status reflects whether Start-Process launched, not the inner
+    // cmd's result, so the authoritative success signal is whether the path is
+    // actually gone afterwards (a denied UAC leaves it present → Err).
+    std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &ps])
+        .status()
+        .map_err(|e| format!("Failed to request elevation: {}", e))?;
+    if path.exists() {
+        return Err("administrator access was denied, or the file is still in use".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn remove_stale_plugins(paths: Vec<String>) -> Result<Vec<String>, String> {
     let mut removed = Vec::new();
@@ -259,21 +309,42 @@ fn remove_stale_plugins(paths: Vec<String>) -> Result<Vec<String>, String> {
                 if msg.contains("os error 32") || msg.contains("being used by another process") {
                     return Err("A plug-in file is in use. Close your DAW and try again.".into());
                 }
-                return Err(format!("{}: {}", p, msg));
+                // Permission denied — almost always a copy in a system folder
+                // (C:\Program Files\Common Files\..., /Library/Audio/Plug-Ins).
+                // The user explicitly asked to remove it, so it's appropriate to
+                // elevate here (unlike the silent install-time sweep). Windows
+                // gets a UAC retry; other platforms surface a clear, actionable
+                // message rather than a bare OS error.
+                let is_denied = msg.contains("os error 5")
+                    || msg.contains("Access is denied")
+                    || msg.contains("Permission denied")
+                    || msg.contains("os error 13");
+                #[cfg(target_os = "windows")]
+                {
+                    if is_denied {
+                        match remove_path_elevated(&path) {
+                            Ok(()) => { removed.push(p); continue; }
+                            Err(ee) => return Err(format!("Couldn't remove {} — {}", p, ee)),
+                        }
+                    }
+                    return Err(format!("{}: {}", p, msg));
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    if is_denied {
+                        return Err(format!(
+                            "Couldn't remove {} — it's in a system folder that needs administrator rights. Remove it manually, or relaunch the Suite with sudo.",
+                            p
+                        ));
+                    }
+                    return Err(format!("{}: {}", p, msg));
+                }
             }
         }
     }
     Ok(removed)
 }
 
-/// Remove copies of a just-installed plug-in bundle that linger in OTHER
-/// folders a DAW scans (system dir, a previously-configured per-user dir, …).
-/// `keep` holds the paths we just wrote — the fresh install — so they're never
-/// touched. Returns (removed, blocked); `blocked` are copies we couldn't delete,
-/// almost always because the DAW currently has them loaded. Best-effort by
-/// design: the caller's install has already succeeded, so a locked leftover is
-/// reported, never fatal. Reuses `is_removable_hardwave_plugin` so it can only
-/// ever delete a `hardwave-*.vst3`/`.clap` sitting directly in a known dir.
 /// Append-only audit trail for the auto-sweep's irreversible deletes, so support
 /// can see exactly what a sweep removed (or failed to remove) on a customer
 /// machine. Best-effort: a logging failure must never block or fail the
@@ -291,6 +362,17 @@ fn append_sweep_log(action: &str, path: &str) {
     }
 }
 
+/// Remove copies of a just-installed plug-in bundle that linger in OTHER
+/// folders a DAW scans (system dir, a previously-configured per-user dir, …).
+/// `keep` holds the paths we just wrote — the fresh install — so they're never
+/// touched. Returns (removed, blocked); `blocked` are copies we couldn't delete,
+/// almost always because the DAW currently has them loaded (or they sit in a
+/// system folder needing admin rights — removable via the user-confirmed "Clean
+/// old versions" repair, which elevates). Best-effort by design: the caller's
+/// install has already succeeded, so a blocked leftover is reported, never fatal,
+/// and we never silently trigger a UAC prompt mid-update. Reuses
+/// `is_removable_hardwave_plugin` so it can only ever delete a
+/// `hardwave-*.vst3`/`.clap` sitting directly in a known dir.
 fn sweep_other_copies(
     bundle_files: &[String],
     keep: &std::collections::HashSet<std::path::PathBuf>,

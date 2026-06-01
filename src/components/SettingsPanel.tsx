@@ -430,7 +430,7 @@ function CleanOldVersions() {
     <div className="mt-8 pt-6 border-t border-white/[0.06]">
       <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Clean old versions</h3>
       <p className="text-[11px] text-zinc-600 leading-relaxed mb-3">
-        Finds leftover Hardwave plug-in files across all plug-in folders. Old copies are the usual cause of a plug-in showing the wrong version. Close your DAW before removing.
+        Finds leftover Hardwave plug-in files across all plug-in folders. Old copies are the usual cause of a plug-in showing the wrong version. Close your DAW before removing. Copies in a system folder will ask for administrator rights.
       </p>
       <button
         onClick={scan}
@@ -447,6 +447,9 @@ function CleanOldVersions() {
               <span className="font-mono text-zinc-200">{it.name}</span>
               <span className="px-1.5 py-0.5 rounded bg-white/[0.06] text-zinc-400">{it.format}</span>
               <span className="text-zinc-600">{it.scope}</span>
+              {it.scope === 'system' && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400/90">needs admin</span>
+              )}
             </label>
           ))}
           <button
