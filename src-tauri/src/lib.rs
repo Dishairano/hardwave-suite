@@ -143,11 +143,28 @@ fn default_sample_dir() -> std::path::PathBuf {
         .join("Hardwave")
 }
 
+/// The DEFAULT install target when the user hasn't overridden the path. On
+/// Windows this is the SYSTEM folder (C:\Program Files\Common Files\VST3) — that
+/// is where FL Studio and most Windows hosts scan by default, so the build lands
+/// where the DAW already looks. (We learned the hard way that installing only to
+/// the per-user folder leaves FL loading an old system copy, or — after a
+/// cleanup removed that copy — finding nothing at all.) Writability is handled by
+/// the installer's ACL grant or the per-install elevation fallback. On
+/// macOS/Linux the per-user path is reliably scanned and needs no elevation, so
+/// we keep it. `default_vst3_dir()` stays the per-user spec path — it's still
+/// used for enumeration and for mirroring the build into the per-user folder.
+fn preferred_install_vst3_dir() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    { std::path::PathBuf::from(r"C:\Program Files\Common Files\VST3") }
+    #[cfg(not(target_os = "windows"))]
+    { default_vst3_dir() }
+}
+
 fn vst3_dir() -> std::path::PathBuf {
     let settings = read_settings();
     settings.get("vst3_path")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(default_vst3_dir)
+        .unwrap_or_else(preferred_install_vst3_dir)
 }
 
 fn default_clap_dir() -> std::path::PathBuf {
@@ -171,11 +188,19 @@ fn default_clap_dir() -> std::path::PathBuf {
     { dirs::home_dir().unwrap_or_default().join(".clap") }
 }
 
+/// System CLAP folder default on Windows (mirrors preferred_install_vst3_dir).
+fn preferred_install_clap_dir() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    { std::path::PathBuf::from(r"C:\Program Files\Common Files\CLAP") }
+    #[cfg(not(target_os = "windows"))]
+    { default_clap_dir() }
+}
+
 fn clap_dir() -> std::path::PathBuf {
     let settings = read_settings();
     settings.get("clap_path")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(default_clap_dir)
+        .unwrap_or_else(preferred_install_clap_dir)
 }
 
 #[derive(serde::Serialize)]
@@ -751,6 +776,31 @@ async fn download_with_resume(
     }
 }
 
+/// Mirror a freshly-extracted bundle into a SECONDARY standard folder so that
+/// whichever standard location a host scans (system OR per-user), it finds the
+/// current build. Best-effort and non-elevating: the primary install already
+/// succeeded, and the per-user folder is always writable, so a failure here is
+/// logged-by-omission, never fatal. Skips work when the target equals a path we
+/// already wrote.
+fn mirror_bundle_into(staging_dir: &std::path::Path, vst3_target: &std::path::Path, clap_target: &std::path::Path) {
+    if std::fs::create_dir_all(vst3_target).is_ok() {
+        let _ = copy_dir_all(staging_dir, vst3_target);
+    }
+    if let Ok(rd) = std::fs::read_dir(staging_dir) {
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.to_lowercase().ends_with(".clap") { continue; }
+            let _ = std::fs::create_dir_all(clap_target);
+            let dest = clap_target.join(&name);
+            let _ = if entry.path().is_dir() {
+                copy_dir_all(&entry.path(), &dest)
+            } else {
+                std::fs::copy(entry.path(), &dest).map(|_| ()).map_err(|e| e.to_string())
+            };
+        }
+    }
+}
+
 #[tauri::command]
 async fn download_and_install(
     file_id: String,
@@ -786,6 +836,9 @@ async fn download_and_install(
         "vst" | "vst3" => vst3_dir(),
         _ => sample_dir(&product_name),
     };
+    // Where the build actually landed — may differ from install_dir if the
+    // archive branch falls back from the system folder to per-user.
+    let mut effective_install_dir = install_dir.clone();
 
     // Extract archive to a temp staging dir first
     let lower = filename.to_lowercase();
@@ -803,32 +856,46 @@ async fn download_and_install(
             extract_tar_gz(&tmp_path, &staging_dir)?;
         }
 
-        // Try direct copy to install dir
-        match copy_dir_all(&staging_dir, &install_dir) {
-            Ok(()) => {}
-            Err(e) => {
-                // File is locked by another process (e.g. DAW has the VST loaded)
-                if e.contains("os error 32") || e.contains("being used by another process") {
-                    return Err("The plugin file is in use. Please close your DAW (e.g. FL Studio, Ableton) and try again.".into());
-                }
-                // On Windows, if permission denied, elevate via UAC
-                #[cfg(target_os = "windows")]
+        // Copy to the install dir. The default VST3 target on Windows is now the
+        // SYSTEM folder (where FL Studio scans); if writing it needs admin we
+        // elevate, and if that's declined or unavailable we fall back to the
+        // per-user folder so the install still completes WITHOUT admin (it used
+        // to always work per-user — we must not regress that). `effective_install_dir`
+        // is where the build actually landed.
+        if let Err(e) = copy_dir_all(&staging_dir, &install_dir) {
+            // File is locked by another process (e.g. DAW has the VST loaded)
+            if e.contains("os error 32") || e.contains("being used by another process") {
+                return Err("The plugin file is in use. Please close your DAW (e.g. FL Studio, Ableton) and try again.".into());
+            }
+            let mut recovered = false;
+            #[cfg(target_os = "windows")]
+            {
+                // Permission denied on the system folder → try one elevated copy.
+                if (e.contains("Access is denied") || e.contains("os error 5"))
+                    && copy_elevated(&staging_dir, &install_dir).is_ok()
                 {
-                    if e.contains("Access is denied") || e.contains("os error 5") {
-                        copy_elevated(&staging_dir, &install_dir)?;
-                    } else {
-                        return Err(e);
-                    }
+                    recovered = true;
                 }
-                #[cfg(not(target_os = "windows"))]
-                {
+            }
+            if !recovered {
+                // Graceful fallback for VST installs: drop into the per-user
+                // folder, which never needs elevation. The user can grant System
+                // access later (Settings → Paths) to also install there.
+                if matches!(category.as_str(), "vst" | "vst3") {
+                    let per_user = default_vst3_dir();
+                    std::fs::create_dir_all(&per_user)
+                        .map_err(|er| format!("Failed to create install dir: {}", er))?;
+                    copy_dir_all(&staging_dir, &per_user)
+                        .map_err(|er| format!("Install failed (no admin rights, and the per-user fallback also failed): {}", er))?;
+                    effective_install_dir = per_user;
+                } else {
                     return Err(e);
                 }
             }
         }
 
         // Verify that files were actually copied
-        let entries: Vec<_> = std::fs::read_dir(&install_dir)
+        let entries: Vec<_> = std::fs::read_dir(&effective_install_dir)
             .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect())
             .unwrap_or_default();
         let staging_entries: Vec<_> = std::fs::read_dir(&staging_dir)
@@ -839,7 +906,7 @@ async fn download_and_install(
                 let _ = std::fs::remove_dir_all(&staging_dir);
                 return Err(format!(
                     "Installation failed: '{}' was not found in '{}'. The plugin may require administrator privileges to install. Try running Hardwave Suite as administrator.",
-                    expected, install_dir.display()
+                    expected, effective_install_dir.display()
                 ));
             }
         }
@@ -871,6 +938,14 @@ async fn download_and_install(
                     let _ = res;
                 }
             }
+
+            // Mirror the build into the PER-USER standard folders too (no
+            // elevation needed there). The primary install now defaults to the
+            // SYSTEM folder where FL Studio scans; mirroring to per-user means a
+            // host configured to scan EITHER standard location still loads the
+            // current version. This is what stops "the DAW can't find it" when
+            // the install folder and the host's scan folder differ.
+            mirror_bundle_into(&staging_dir, &default_vst3_dir(), &default_clap_dir());
         }
 
         // Sweep older copies of THIS bundle out of every other folder a DAW
@@ -885,9 +960,23 @@ async fn download_and_install(
                 .filter(|n| { let l = n.to_lowercase(); l.ends_with(".vst3") || l.ends_with(".clap") })
                 .cloned()
                 .collect();
+            // Protect EVERY standard folder from the sweep, not just the primary
+            // install target. We now write the current build into both the
+            // system and per-user standard folders, so the sweep must never
+            // remove a copy from any of them — otherwise it could orphan a host
+            // that scans a different standard folder than the one we installed
+            // into (exactly the "FL can't find it" regression). The sweep is
+            // thus left to clean only NON-standard / custom / legacy leftovers.
+            let standard_dirs = [
+                effective_install_dir.clone(), clap_dir(),
+                default_vst3_dir(), default_clap_dir(),
+                std::path::PathBuf::from(system_vst3_dir()),
+                std::path::PathBuf::from(system_clap_dir()),
+            ];
             let mut keep: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
             for name in &bundle_files {
-                for p in [install_dir.join(name), clap_dir().join(name)] {
+                for dir in &standard_dirs {
+                    let p = dir.join(name);
                     if let Ok(c) = p.canonicalize() { keep.insert(c); }
                     keep.insert(p);
                 }
@@ -916,7 +1005,7 @@ async fn download_and_install(
         let _ = tokio::fs::remove_file(&tmp_path).await;
     }
 
-    let install_path = install_dir.to_string_lossy().to_string();
+    let install_path = effective_install_dir.to_string_lossy().to_string();
 
     if let (Some(slug), Some(ver)) = (&product_slug, &product_version) {
         mark_installed(slug, ver);
@@ -1049,6 +1138,17 @@ fn system_vst3_dir() -> String {
     { String::from("/Library/Audio/Plug-Ins/VST3") }
     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
     { String::from("/usr/lib/vst3") }
+}
+
+/// The canonical system CLAP path on this platform — mirror of system_vst3_dir.
+/// Used to protect the system CLAP folder from the install-time sweep.
+fn system_clap_dir() -> String {
+    #[cfg(target_os = "windows")]
+    { String::from(r"C:\Program Files\Common Files\CLAP") }
+    #[cfg(target_os = "macos")]
+    { String::from("/Library/Audio/Plug-Ins/CLAP") }
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    { String::from("/usr/lib/clap") }
 }
 
 /// Request elevation and grant the current user (OI)(CI)(M) Modify rights on
