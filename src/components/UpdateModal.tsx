@@ -144,12 +144,30 @@ export function UpdateModal({
 
 function formatChangelog(text: string): string {
   if (!text) return 'Bug fixes and improvements.'
-  // Split into lines, clean up markdown, take first 4 items as summary
-  const lines = text
-    .replace(/^#+\s*/gm, '')
-    .split('\n')
-    .map(l => l.replace(/^\s*[-*]\s*/, '').trim())
+  // Keep only real bullet points. The release body also contains the version
+  // heading, a tagline and a markdown Downloads table; the previous version
+  // stripped the leading '#' and bulleted all of it, so the modal opened with
+  // "* Hardwave WettBoi v0.3.11" run together with the first real point.
+  const lines = text.split('\n')
+  const bullets = lines
+    // a bullet is a line starting with -, * or • (allowing indentation)
+    .filter(l => /^\s*[-*\u2022]\s+\S/.test(l))
+    // drop markdown table rows and separators that can start with a dash
+    .filter(l => !/^\s*[-*\u2022]?\s*\|/.test(l) && !/^\s*[-|: ]+$/.test(l))
+    .map(l => l.replace(/^\s*[-*\u2022]\s+/, '').trim())
+    // strip surrounding markdown emphasis/backticks so it reads as plain text
+    .map(l => l.replace(/\*\*(.+?)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1'))
     .filter(Boolean)
-  const items = lines.slice(0, 4)
-  return items.map(l => `\u2022 ${l}`).join('\n')
+
+  if (bullets.length === 0) {
+    // No bullets in the body: fall back to the first sentence of real prose,
+    // skipping headings, tables and links.
+    const prose = lines
+      .map(l => l.trim())
+      .filter(l => l && !l.startsWith('#') && !l.startsWith('|') && !l.startsWith('['))
+      .filter(l => !/^[-|: ]+$/.test(l))
+    return prose.length ? prose[0] : 'Bug fixes and improvements.'
+  }
+
+  return bullets.slice(0, 4).map(l => `\u2022 ${l}`).join('\n')
 }
