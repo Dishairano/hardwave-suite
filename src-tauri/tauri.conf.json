@@ -46,6 +46,9 @@
         "headerImage": "nsis/header.bmp",
         "sidebarImage": "nsis/sidebar.bmp"
       }
+    },
+    "macOS": {
+      "signingIdentity": "-"
     }
   },
   "plugins": {
