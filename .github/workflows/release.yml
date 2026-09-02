@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual test builds. No tag means no release is published: the bundles are
+  # attached to the run as artefacts instead.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -45,6 +48,9 @@ jobs:
             patchelf libglib2.0-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
 
       - name: Set version from tag
+        # Tag pushes only. On a manual run GITHUB_REF is a branch, which is not
+        # a semver string and fails the Tauri config parse.
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -173,7 +179,7 @@ jobs:
           Remove-Item $certPath -Force
 
       - name: Upload Windows artifacts
-        if: matrix.platform == 'windows-latest'
+        if: startsWith(github.ref, 'refs/tags/') && (matrix.platform == 'windows-latest')
         uses: softprops/action-gh-release@v2
         with:
           draft: false
@@ -186,7 +192,7 @@ jobs:
             src-tauri/target/release/bundle/msi/*.msi.sig
 
       - name: Upload macOS artifacts
-        if: matrix.platform == 'macos-latest'
+        if: startsWith(github.ref, 'refs/tags/') && (matrix.platform == 'macos-latest')
         uses: softprops/action-gh-release@v2
         with:
           draft: false
@@ -196,7 +202,7 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
 
       - name: Upload Linux artifacts
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(github.ref, 'refs/tags/') && (matrix.platform == 'ubuntu-22.04')
         uses: softprops/action-gh-release@v2
         with:
           draft: false
@@ -314,3 +320,15 @@ jobs:
 
           # Clean up
           rm -f ~/.ssh/deploy_key
+
+      - name: Upload bundles for manual test runs
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: suite-test-${{ matrix.platform }}${{ matrix.target && format('-{0}', matrix.target) || '' }}
+          path: |
+            src-tauri/target/**/release/bundle/**/*.dmg
+            src-tauri/target/**/release/bundle/**/*.exe
+            src-tauri/target/**/release/bundle/**/*.msi
+            src-tauri/target/**/release/bundle/**/*.AppImage
+          if-no-files-found: warn
