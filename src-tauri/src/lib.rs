@@ -544,6 +544,26 @@ fn extract_zip(zip_path: &std::path::Path, dest_dir: &std::path::Path) -> Result
                 .map_err(|e| format!("Failed to create file {}: {}", name, e))?;
             std::io::copy(&mut entry, &mut out_file)
                 .map_err(|e| format!("Failed to extract {}: {}", name, e))?;
+
+            // A .vst3 or .clap on macOS/Linux is a bundle whose inner binary
+            // must stay executable. File::create makes it 0644, so without
+            // restoring the archived mode the plug-in installs cleanly and
+            // then silently fails to load in the DAW.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = entry.unix_mode().unwrap_or(0);
+                // Some zip writers drop modes entirely; fall back to the known
+                // bundle layout rather than shipping a non-executable binary.
+                let needs_exec = mode & 0o111 != 0
+                    || name.contains("Contents/MacOS/")
+                    || name.contains("/x86_64-linux/");
+                let final_mode = if needs_exec { 0o755 } else if mode != 0 { mode } else { 0o644 };
+                let _ = std::fs::set_permissions(
+                    &out_path,
+                    std::fs::Permissions::from_mode(final_mode),
+                );
+            }
         }
     }
 
