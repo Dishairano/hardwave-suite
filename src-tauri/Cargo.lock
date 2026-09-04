@@ -1465,7 +1465,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-suite"
-version = "0.22.14"
+version = "0.22.15"
 dependencies = [
  "chrono",
  "dirs 5.0.1",

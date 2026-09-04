@@ -191,6 +191,42 @@ jobs:
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/msi/*.msi.sig
 
+      - name: Name the macOS updater bundle per architecture
+        # Both macOS matrix jobs bundle a file called exactly
+        # "Hardwave Suite.app.tar.gz" and upload it to the same release, so
+        # whichever job finished last silently replaced the other and every
+        # Mac was served that one architecture. The .dmg bundles already carry
+        # the arch in their names; the updater tarball now does too.
+        #
+        # The lipo check is the guard that was missing: an Intel binary
+        # published under darwin-aarch64 looks fine everywhere except on a
+        # customer's Mac.
+        if: matrix.platform == 'macos-latest'
+        run: |
+          set -euo pipefail
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin) SLUG=aarch64; WANT=arm64  ;;
+            x86_64-apple-darwin)  SLUG=x64;     WANT=x86_64 ;;
+            *) echo "unexpected macOS target ${{ matrix.target }}" >&2; exit 1 ;;
+          esac
+
+          DIR="src-tauri/target/${{ matrix.target }}/release/bundle/macos"
+          SRC=$(ls "$DIR"/*.app.tar.gz | head -1)
+          [ -n "$SRC" ] || { echo "no .app.tar.gz in $DIR" >&2; exit 1; }
+          [ -f "$SRC.sig" ] || { echo "no signature beside $SRC" >&2; exit 1; }
+
+          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Hardwave Suite.app"
+          GOT=$(lipo -archs "$APP/Contents/MacOS/hardwave-suite")
+          echo "built for: $GOT (expected $WANT)"
+          case " $GOT " in
+            *" $WANT "*) ;;
+            *) echo "wrong architecture: built $GOT, expected $WANT" >&2; exit 1 ;;
+          esac
+
+          mv "$SRC"     "$DIR/Hardwave.Suite_${SLUG}.app.tar.gz"
+          mv "$SRC.sig" "$DIR/Hardwave.Suite_${SLUG}.app.tar.gz.sig"
+          ls -la "$DIR"
+
       - name: Upload macOS artifacts
         if: startsWith(github.ref, 'refs/tags/') && (matrix.platform == 'macos-latest')
         uses: softprops/action-gh-release@v2
@@ -259,7 +295,16 @@ jobs:
 
           # Read signatures from downloaded assets
           WIN_SIG=$(cat /tmp/release-assets/*.exe.sig 2>/dev/null || echo "")
-          MAC_SIG=$(cat /tmp/release-assets/*.app.tar.gz.sig 2>/dev/null || echo "")
+          # One signature per macOS architecture. Empty is fatal: publishing a
+          # manifest with a blank signature makes every Mac update fail with a
+          # verification error rather than an obvious build failure here.
+          MAC_ARM_SIG=$(cat /tmp/release-assets/Hardwave.Suite_aarch64.app.tar.gz.sig 2>/dev/null || echo "")
+          MAC_X64_SIG=$(cat /tmp/release-assets/Hardwave.Suite_x64.app.tar.gz.sig 2>/dev/null || echo "")
+          for pair in "aarch64:$MAC_ARM_SIG" "x64:$MAC_X64_SIG"; do
+            if [ -z "${pair#*:}" ]; then
+              echo "missing macOS signature for ${pair%%:*}" >&2; exit 1
+            fi
+          done
           LINUX_SIG=$(cat /tmp/release-assets/*.AppImage.sig 2>/dev/null || echo "")
 
           # Build latest.json with hardwavestudios.com URLs
@@ -275,8 +320,12 @@ jobs:
                 'url': '${BASE}/Hardwave.Suite_${VERSION}_x64-setup.exe'
               },
               'darwin-aarch64': {
-                'signature': '''${MAC_SIG}''',
-                'url': '${BASE}/Hardwave.Suite.app.tar.gz'
+                'signature': '''${MAC_ARM_SIG}''',
+                'url': '${BASE}/Hardwave.Suite_aarch64.app.tar.gz'
+              },
+              'darwin-x86_64': {
+                'signature': '''${MAC_X64_SIG}''',
+                'url': '${BASE}/Hardwave.Suite_x64.app.tar.gz'
               },
               'linux-x86_64': {
                 'signature': '''${LINUX_SIG}''',
