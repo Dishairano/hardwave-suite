@@ -179,6 +179,9 @@ function BetaRow({
           {plugin.artefactSize > 0 && (
             <span className="ml-2 text-zinc-600">{formatBytes(plugin.artefactSize)}</span>
           )}
+          {!plugin.availableHere && plugin.platforms.length > 0 && (
+            <span className="ml-2 text-zinc-600">{formatPlatforms(plugin.platforms)} only</span>
+          )}
         </div>
         {plugin.changelog && (
           <p className="text-xs text-zinc-500 mt-1 line-clamp-2 leading-relaxed">
@@ -206,6 +209,14 @@ function BetaRow({
             <CheckCircle className="w-3.5 h-3.5" />
             Installed
           </span>
+        ) : !plugin.availableHere ? (
+          <button
+            disabled
+            title={plugin.platforms.length ? `Built for ${formatPlatforms(plugin.platforms)}` : undefined}
+            className="px-3 py-2 rounded-lg bg-white/[0.04] border border-white/[0.08] text-zinc-500 text-xs font-semibold cursor-not-allowed"
+          >
+            Not for your system yet
+          </button>
         ) : expired ? (
           <button
             disabled
@@ -333,6 +344,12 @@ function formatBytes(bytes: number): string {
   const sizes = ['B', 'KB', 'MB', 'GB']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
+}
+
+const PLATFORM_LABELS: Record<string, string> = { windows: 'Windows', macos: 'macOS', linux: 'Linux' }
+
+function formatPlatforms(platforms: string[]): string {
+  return platforms.map((p) => PLATFORM_LABELS[p] ?? p).join(', ')
 }
 
 function prettySlug(slug: string): string {

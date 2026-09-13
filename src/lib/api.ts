@@ -301,6 +301,10 @@ export interface BetaPlugin {
   artefactSha256: string
   artefactSize: number
   changelog: string | null
+  /** A build exists for this computer's OS; the artefact fields hold it. */
+  availableHere: boolean
+  /** Platforms the beta has a build for: windows, macos, linux. */
+  platforms: string[]
 }
 
 export interface BetaWarningEvent {

@@ -37,6 +37,11 @@ pub struct BetaPlugin {
     pub artefact_sha256: String,
     pub artefact_size: i64,
     pub changelog: Option<String>,
+    /// A build of this beta exists for the OS the Suite runs on; the artefact_*
+    /// fields hold it. False means they are empty.
+    pub available_here: bool,
+    /// Platforms this beta has a build for (windows, macos, linux).
+    pub platforms: Vec<String>,
 }
 
 // ── Wire types matching the live backend ────────────────────────────────────
@@ -88,14 +93,28 @@ struct BetaPluginRaw {
     hours_until_expiry: f64,
     #[serde(rename = "hours_until_soft_warn", alias = "hoursUntilSoftWarn", default)]
     hours_until_soft_warn: f64,
+    #[serde(rename = "artefact_url", alias = "artefactUrl", default)]
+    artefact_url: String,
+    #[serde(rename = "artefact_sha256", alias = "artefactSha256", default)]
+    artefact_sha256: String,
+    #[serde(rename = "artefact_size", alias = "artefactSize", default)]
+    artefact_size: i64,
+    #[serde(default)]
+    changelog: Option<String>,
+    /// One build per platform. Absent from manifests before per-platform betas.
+    #[serde(default)]
+    artefacts: Vec<BetaArtefactRaw>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BetaArtefactRaw {
+    platform: String,
     #[serde(rename = "artefact_url", alias = "artefactUrl")]
     artefact_url: String,
     #[serde(rename = "artefact_sha256", alias = "artefactSha256")]
     artefact_sha256: String,
     #[serde(rename = "artefact_size", alias = "artefactSize", default)]
     artefact_size: i64,
-    #[serde(default)]
-    changelog: Option<String>,
 }
 
 // ── Local-disk paths ────────────────────────────────────────────────────────
@@ -277,18 +296,27 @@ pub async fn fetch_beta_manifest(token: &str) -> Result<Vec<BetaPlugin>, String>
     Ok(raw
         .plugins
         .into_iter()
-        .map(|p| BetaPlugin {
-            id: p.id,
-            plugin_slug: p.plugin_slug,
-            version: p.version,
-            released_at: p.released_at,
-            expires_at: p.expires_at,
-            hours_until_expiry: p.hours_until_expiry,
-            hours_until_soft_warn: p.hours_until_soft_warn,
-            artefact_url: p.artefact_url,
-            artefact_sha256: p.artefact_sha256,
-            artefact_size: p.artefact_size,
-            changelog: p.changelog,
+        .map(|p| {
+            let legacy = (p.artefact_url.as_str(), p.artefact_sha256.as_str(), p.artefact_size);
+            let picked = pick_artefact(&p.artefacts, legacy, std::env::consts::OS);
+            let platforms = platforms_of(&p.artefacts, &p.artefact_url);
+            let available_here = picked.is_some();
+            let (artefact_url, artefact_sha256, artefact_size) = picked.unwrap_or_default();
+            BetaPlugin {
+                id: p.id,
+                plugin_slug: p.plugin_slug,
+                version: p.version,
+                released_at: p.released_at,
+                expires_at: p.expires_at,
+                hours_until_expiry: p.hours_until_expiry,
+                hours_until_soft_warn: p.hours_until_soft_warn,
+                artefact_url,
+                artefact_sha256,
+                artefact_size,
+                changelog: p.changelog,
+                available_here,
+                platforms,
+            }
         })
         .collect())
 }
@@ -308,29 +336,65 @@ fn artefact_filename(url: &str) -> Option<String> {
     Some(name.to_string())
 }
 
-/// The operating system an artefact name says it was built for, when it says so
-/// and that is not `os`. The beta manifest carries one artefact per plug-in, so a
-/// Windows-only beta must not be unpacked into a Mac's plug-in folder.
-fn built_for_other_os(filename: &str, os: &str) -> Option<&'static str> {
+/// The OS an artefact's file name says it was built for, if it says so.
+fn os_of_filename(filename: &str) -> Option<&'static str> {
     let name = filename.to_lowercase();
-    let target = if name.contains("windows") || name.contains("win64") || name.contains("-win-") {
-        "windows"
+    if name.contains("windows") || name.contains("win64") || name.contains("-win-") {
+        Some("windows")
     } else if name.contains("macos") || name.contains("darwin") || name.contains("-mac-") {
-        "macos"
+        Some("macos")
     } else if name.contains("linux") {
-        "linux"
+        Some("linux")
     } else {
-        return None;
-    };
-    if target == os {
         None
-    } else {
-        Some(match target {
-            "windows" => "Windows",
-            "macos" => "macOS",
-            _ => "Linux",
-        })
     }
+}
+
+fn os_label(os: &str) -> &'static str {
+    match os {
+        "windows" => "Windows",
+        "macos" => "macOS",
+        _ => "Linux",
+    }
+}
+
+/// The OS an artefact name says it was built for, when that is not `os`.
+/// Last line of defence at install time; the manifest picker already chose.
+fn built_for_other_os(filename: &str, os: &str) -> Option<&'static str> {
+    os_of_filename(filename).filter(|t| *t != os).map(os_label)
+}
+
+/// The build of a beta for `os`. A manifest with per-platform artefacts is
+/// matched on platform. An older manifest carries one artefact, which is used
+/// unless its name says it is for another OS.
+fn pick_artefact(
+    artefacts: &[BetaArtefactRaw],
+    legacy: (&str, &str, i64),
+    os: &str,
+) -> Option<(String, String, i64)> {
+    if !artefacts.is_empty() {
+        return artefacts
+            .iter()
+            .find(|a| a.platform == os)
+            .map(|a| (a.artefact_url.clone(), a.artefact_sha256.clone(), a.artefact_size));
+    }
+    let (url, sha256, size) = legacy;
+    let name = artefact_filename(url)?;
+    match os_of_filename(&name) {
+        Some(target) if target != os => None,
+        _ => Some((url.to_string(), sha256.to_string(), size)),
+    }
+}
+
+/// Platforms a beta has a build for, to tell users on other systems what exists.
+fn platforms_of(artefacts: &[BetaArtefactRaw], legacy_url: &str) -> Vec<String> {
+    if !artefacts.is_empty() {
+        return artefacts.iter().map(|a| a.platform.clone()).collect();
+    }
+    artefact_filename(legacy_url)
+        .and_then(|n| os_of_filename(&n))
+        .map(|os| vec![os.to_string()])
+        .unwrap_or_default()
 }
 
 fn valid_slug(slug: &str) -> bool {
@@ -598,6 +662,42 @@ mod tests {
         assert_eq!(built_for_other_os(mac, "windows"), Some("macOS"));
         assert_eq!(built_for_other_os("hardwave-wettboi-linux-x64.zip", "windows"), Some("Linux"));
         assert_eq!(built_for_other_os("hardwave-wettboi.zip", "macos"), None);
+    }
+
+    fn artefact(platform: &str, url: &str) -> BetaArtefactRaw {
+        BetaArtefactRaw {
+            platform: platform.into(),
+            artefact_url: url.into(),
+            artefact_sha256: "a".repeat(64),
+            artefact_size: 10,
+        }
+    }
+
+    #[test]
+    fn picks_the_build_for_this_os() {
+        let list = vec![
+            artefact("windows", "https://x/hardwave-wettboi-windows-x64.zip"),
+            artefact("macos", "https://x/hardwave-wettboi-macos-universal.zip"),
+        ];
+        let legacy = ("https://x/hardwave-wettboi-windows-x64.zip", "b", 5);
+        let mac = pick_artefact(&list, legacy, "macos").expect("mac build");
+        assert!(mac.0.ends_with("macos-universal.zip"));
+        assert!(pick_artefact(&list, legacy, "windows").unwrap().0.ends_with("windows-x64.zip"));
+        // Per-platform list without Linux: no fallback to the legacy Windows zip.
+        assert_eq!(pick_artefact(&list, legacy, "linux"), None);
+        assert_eq!(platforms_of(&list, legacy.0), vec!["windows", "macos"]);
+    }
+
+    #[test]
+    fn older_manifests_fall_back_to_the_single_artefact() {
+        let win = ("https://x/hardwave-wettboi-windows-x64.zip", "b", 5);
+        assert!(pick_artefact(&[], win, "windows").is_some());
+        assert_eq!(pick_artefact(&[], win, "macos"), None);
+        let unnamed = ("https://x/hardwave-wettboi.zip", "b", 5);
+        assert!(pick_artefact(&[], unnamed, "linux").is_some());
+        assert_eq!(pick_artefact(&[], ("", "", 0), "windows"), None);
+        assert_eq!(platforms_of(&[], win.0), vec!["windows"]);
+        assert!(platforms_of(&[], unnamed.0).is_empty());
     }
 
     #[test]
