@@ -1235,7 +1235,7 @@ function ChannelTab({
                   <BetaPill text={betaEligible ? 'PRO' : 'LOCKED · PRO'} locked={!betaEligible} />
                 </div>
                 <p className="text-xs text-zinc-500 leading-relaxed">
-                  Pre-release builds of upcoming plug-ins. Available to Hardwave Pro subscribers. Installs to a separate folder so your stable plug-ins are untouched. New builds drop every 2–3 weeks.
+                  Pre-release builds of upcoming plug-ins for Pro and lifetime members. A beta replaces the installed version in your plug-in folder, and the plug-in&apos;s card has a Back to stable button. New builds drop every 2–3 weeks.
                 </p>
               </div>
               {betaEligible ? (
