@@ -834,40 +834,23 @@ fn mirror_bundle_into(staging_dir: &std::path::Path, vst3_target: &std::path::Pa
     }
 }
 
-#[tauri::command]
-async fn download_and_install(
-    file_id: String,
-    url: String,
-    filename: String,
-    category: String,
-    product_name: String,
-    product_slug: Option<String>,
-    product_version: Option<String>,
-    state: State<'_, AppState>,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
-    let token = state.api_token.lock().unwrap().clone();
-
-    let (tmp_path, downloaded) = download_with_resume(&url, &token, &filename, &file_id, &app).await?;
-
-    let total = downloaded;
-
-    // Emit installing status
-    let _ = app.emit(
-        "dl:progress",
-        DownloadProgress {
-            file_id: file_id.clone(),
-            percent: 100,
-            downloaded,
-            total,
-            status: "installing".into(),
-            install_path: None,
-        },
-    );
-
-    let install_dir = match category.as_str() {
+/// Put a downloaded plug-in (or sample) archive where hosts load it from and
+/// return the folder it actually landed in. Shared by the stable installer and
+/// the beta channel, so a beta build lands in exactly the folders a stable
+/// build does: the system VST3 folder, the CLAP folder, the per-user mirror,
+/// and the sweep of stale copies elsewhere.
+async fn install_downloaded_bundle(
+    tmp_path: &std::path::Path,
+    filename: &str,
+    file_id: &str,
+    category: &str,
+    product_name: &str,
+    product_slug: Option<&str>,
+    app: &tauri::AppHandle,
+) -> Result<std::path::PathBuf, String> {
+    let install_dir = match category {
         "vst" | "vst3" => vst3_dir(),
-        _ => sample_dir(&product_name),
+        _ => sample_dir(product_name),
     };
     // Where the build actually landed — may differ from install_dir if the
     // archive branch falls back from the system folder to per-user.
@@ -937,7 +920,7 @@ async fn download_and_install(
                 // Graceful fallback for VST installs: drop into the per-user
                 // folder, which never needs elevation. The user can grant System
                 // access later (Settings → Paths) to also install there.
-                if matches!(category.as_str(), "vst" | "vst3") {
+                if matches!(category, "vst" | "vst3") {
                     let per_user = default_vst3_dir();
                     std::fs::create_dir_all(&per_user)
                         .map_err(|er| format!("Failed to create install dir: {}", er))?;
@@ -972,7 +955,7 @@ async fn download_and_install(
         // VST3 dir, so without this the DAW's CLAP scanner never sees the new
         // build — that's the "still shows the old version" bug. Additive and
         // best-effort: never fails the (already-succeeded) VST3 install.
-        if matches!(category.as_str(), "vst" | "vst3") {
+        if matches!(category, "vst" | "vst3") {
             let cdir = clap_dir();
             if let Ok(rd) = std::fs::read_dir(&staging_dir) {
                 for entry in rd.flatten() {
@@ -1010,7 +993,7 @@ async fn download_and_install(
         // happens — the DAW loads whichever copy it finds first. We derive the
         // bundle's filenames from the staging dir (not the slug), so it works
         // even when an older Suite UI didn't pass product_slug/version.
-        if matches!(category.as_str(), "vst" | "vst3") {
+        if matches!(category, "vst" | "vst3") {
             let bundle_files: Vec<String> = staging_entries
                 .iter()
                 .filter(|n| { let l = n.to_lowercase(); l.ends_with(".vst3") || l.ends_with(".clap") })
@@ -1042,7 +1025,7 @@ async fn download_and_install(
                 let _ = app.emit(
                     "dl:cleaned",
                     serde_json::json!({
-                        "slug": product_slug.clone().unwrap_or_default(),
+                        "slug": product_slug.unwrap_or_default(),
                         "removed": removed,
                         "blocked": blocked,
                     }),
@@ -1061,10 +1044,57 @@ async fn download_and_install(
         let _ = tokio::fs::remove_file(&tmp_path).await;
     }
 
+    Ok(effective_install_dir)
+}
+
+#[tauri::command]
+async fn download_and_install(
+    file_id: String,
+    url: String,
+    filename: String,
+    category: String,
+    product_name: String,
+    product_slug: Option<String>,
+    product_version: Option<String>,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let token = state.api_token.lock().unwrap().clone();
+
+    let (tmp_path, downloaded) = download_with_resume(&url, &token, &filename, &file_id, &app).await?;
+
+    let total = downloaded;
+
+    // Emit installing status
+    let _ = app.emit(
+        "dl:progress",
+        DownloadProgress {
+            file_id: file_id.clone(),
+            percent: 100,
+            downloaded,
+            total,
+            status: "installing".into(),
+            install_path: None,
+        },
+    );
+
+    let effective_install_dir = install_downloaded_bundle(
+        &tmp_path,
+        &filename,
+        &file_id,
+        &category,
+        &product_name,
+        product_slug.as_deref(),
+        &app,
+    )
+    .await?;
+
     let install_path = effective_install_dir.to_string_lossy().to_string();
 
     if let (Some(slug), Some(ver)) = (&product_slug, &product_version) {
         mark_installed(slug, ver);
+        // A stable install replaces any beta build of this plug-in.
+        beta::forget_installed_beta(slug);
     }
 
     let _ = app.emit(
@@ -1156,6 +1186,7 @@ async fn uninstall_plugin(slug: String, category: String) -> Result<(), String> 
     }
 
     mark_uninstalled(&slug);
+    beta::forget_installed_beta(&slug);
     Ok(())
 }
 
@@ -1793,6 +1824,13 @@ fn set_auto_attach_crash_logs(enabled: bool) -> Result<(), String> {
     beta::write_auto_attach_crash_logs(enabled)
 }
 
+/// Install a beta build into the same plug-in folders a stable install uses.
+///
+/// Betas used to unpack into `~/.hardwave/plugins/beta/<slug>`, a folder no DAW
+/// scans, so a tester "installed" a release candidate and kept loading the
+/// stable build. The verified artefact now goes through the stable installer
+/// and the registry records the beta's version, so the library shows what the
+/// DAW will load and does not offer the older stable build as an update.
 #[tauri::command]
 async fn install_beta_build(
     slug: String,
@@ -1801,9 +1839,27 @@ async fn install_beta_build(
     sha256: String,
     expires_at: String,
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
     let token = state.api_token.lock().unwrap().clone();
-    beta::install_beta_build(token.as_deref(), &slug, &version, &url, &sha256, &expires_at).await
+    let (artefact, filename) =
+        beta::download_verified_artefact(token.as_deref(), &slug, &url, &sha256).await?;
+    let installed = install_downloaded_bundle(
+        &artefact,
+        &filename,
+        &format!("beta-{}", slug),
+        "vst",
+        &slug,
+        Some(&slug),
+        &app,
+    )
+    .await;
+    let _ = std::fs::remove_file(&artefact);
+    let install_dir = installed?;
+
+    mark_installed(&slug, &version);
+    beta::record_installed_beta(&slug, &version, &install_dir, &expires_at)?;
+    Ok(install_dir.to_string_lossy().to_string())
 }
 
 #[tauri::command]

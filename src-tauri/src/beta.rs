@@ -1,6 +1,7 @@
 // Beta channel: subscription check, beta manifest fetch, channel persistence,
-// installer dispatch into a separate ~/.hardwave/plugins/beta/ namespace,
-// and a tokio expiry watcher that emits soft-warn / expired events.
+// verified artefact download (lib.rs installs it into the real plug-in folders),
+// the installed-betas registry, and a tokio expiry watcher that emits
+// soft-warn / expired events.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -113,10 +114,6 @@ fn config_path() -> PathBuf {
 
 fn beta_plugins_root() -> PathBuf {
     hardwave_root().join("plugins").join("beta")
-}
-
-fn beta_install_dir(slug: &str) -> PathBuf {
-    beta_plugins_root().join(slug)
 }
 
 fn installed_betas_path() -> PathBuf {
@@ -298,41 +295,75 @@ pub async fn fetch_beta_manifest(token: &str) -> Result<Vec<BetaPlugin>, String>
 
 // ── Beta install pipeline ───────────────────────────────────────────────────
 
-/// Download a beta artefact, verify its sha256, then extract into
-/// `~/.hardwave/plugins/beta/<slug>/`. Records the install + expiry so the
-/// watcher can disable expired builds. Returns the install directory.
-pub async fn install_beta_build(
+/// Last path segment of the artefact URL, without a query string.
+fn artefact_filename(url: &str) -> Option<String> {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let name = path.rsplit('/').next().unwrap_or("");
+    let lower = name.to_lowercase();
+    let is_archive = lower.ends_with(".zip") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz");
+    // The name becomes part of a temp path and decides how it is unpacked.
+    if !is_archive || name.contains("..") || name.contains('\\') {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+/// The operating system an artefact name says it was built for, when it says so
+/// and that is not `os`. The beta manifest carries one artefact per plug-in, so a
+/// Windows-only beta must not be unpacked into a Mac's plug-in folder.
+fn built_for_other_os(filename: &str, os: &str) -> Option<&'static str> {
+    let name = filename.to_lowercase();
+    let target = if name.contains("windows") || name.contains("win64") || name.contains("-win-") {
+        "windows"
+    } else if name.contains("macos") || name.contains("darwin") || name.contains("-mac-") {
+        "macos"
+    } else if name.contains("linux") {
+        "linux"
+    } else {
+        return None;
+    };
+    if target == os {
+        None
+    } else {
+        Some(match target {
+            "windows" => "Windows",
+            "macos" => "macOS",
+            _ => "Linux",
+        })
+    }
+}
+
+fn valid_slug(slug: &str) -> bool {
+    !slug.is_empty() && slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// Download a beta artefact and verify its sha256. Returns the temp file and the
+/// artefact's filename; the caller installs it and removes the temp file.
+///
+/// The checksum is required: a beta goes into the same folders the DAW loads
+/// stable builds from.
+pub async fn download_verified_artefact(
     token: Option<&str>,
     slug: &str,
-    version: &str,
     url: &str,
     sha256: &str,
-    expires_at: &str,
-) -> Result<String, String> {
-    let install_dir = beta_install_dir(slug);
-    let parent = install_dir
-        .parent()
-        .ok_or_else(|| "beta install dir has no parent".to_string())?;
-    std::fs::create_dir_all(parent)
-        .map_err(|e| format!("Failed to create beta plugins root: {}", e))?;
-
-    // Wipe any prior install for this slug so versions never overlap.
-    if install_dir.exists() {
-        std::fs::remove_dir_all(&install_dir)
-            .map_err(|e| format!("Failed to clean prior beta install: {}", e))?;
+) -> Result<(PathBuf, String), String> {
+    if !valid_slug(slug) {
+        return Err(format!("Invalid plug-in slug '{}'", slug));
     }
-    let expired_dir = parent.join(format!("{}.expired", slug));
-    if expired_dir.exists() {
-        let _ = std::fs::remove_dir_all(&expired_dir);
+    let filename = artefact_filename(url)
+        .ok_or_else(|| "Beta artefact must be a .zip or .tar.gz archive".to_string())?;
+    if let Some(other) = built_for_other_os(&filename, std::env::consts::OS) {
+        return Err(format!(
+            "This beta build is for {} only. A build for your system will follow with the release.",
+            other
+        ));
+    }
+    let expected = sha256.trim().to_lowercase();
+    if expected.len() != 64 || !expected.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Beta artefact has no valid sha256, refusing to install it".into());
     }
 
-    // Download to a temp file.
-    let filename = url
-        .rsplit('/')
-        .next()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(slug)
-        .to_string();
     let tmp_path = std::env::temp_dir().join(format!("hw_beta_{}_{}", slug, filename));
     let _ = std::fs::remove_file(&tmp_path);
 
@@ -360,12 +391,10 @@ pub async fn install_beta_build(
         .await
         .map_err(|e| format!("Beta download read failed: {}", e))?;
 
-    // Verify sha256.
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
     let actual = format!("{:x}", hasher.finalize());
-    let expected = sha256.trim().to_lowercase();
-    if !expected.is_empty() && actual != expected {
+    if actual != expected {
         return Err(format!(
             "Beta artefact sha256 mismatch (expected {}, got {})",
             expected, actual
@@ -375,22 +404,16 @@ pub async fn install_beta_build(
     std::fs::write(&tmp_path, &bytes)
         .map_err(|e| format!("Failed to write beta artefact: {}", e))?;
 
-    // Extract zip / tar.gz into install_dir.
-    std::fs::create_dir_all(&install_dir)
-        .map_err(|e| format!("Failed to create beta install dir: {}", e))?;
+    Ok((tmp_path, filename))
+}
 
-    let lower = filename.to_lowercase();
-    if lower.ends_with(".zip") {
-        extract_zip(&tmp_path, &install_dir)?;
-    } else if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
-        extract_tar_gz(&tmp_path, &install_dir)?;
-    } else {
-        // Single file — just copy it in.
-        std::fs::copy(&tmp_path, install_dir.join(&filename))
-            .map_err(|e| format!("Failed to copy beta artefact: {}", e))?;
-    }
-    let _ = std::fs::remove_file(&tmp_path);
-
+/// Record an installed beta so the watcher can warn before it expires.
+pub fn record_installed_beta(
+    slug: &str,
+    version: &str,
+    install_dir: &Path,
+    expires_at: &str,
+) -> Result<(), String> {
     upsert_installed_beta(InstalledBetaRecord {
         slug: slug.to_string(),
         version: version.to_string(),
@@ -400,62 +423,22 @@ pub async fn install_beta_build(
         expired: false,
     })?;
 
-    Ok(install_dir.to_string_lossy().to_string())
-}
-
-fn extract_zip(zip_path: &Path, dest_dir: &Path) -> Result<(), String> {
-    let file = std::fs::File::open(zip_path).map_err(|e| format!("Open zip: {}", e))?;
-    let mut archive =
-        zip::ZipArchive::new(file).map_err(|e| format!("Read zip: {}", e))?;
-    for i in 0..archive.len() {
-        let mut entry = archive
-            .by_index(i)
-            .map_err(|e| format!("Zip entry: {}", e))?;
-        let name = entry.name().to_string();
-        let out_path = dest_dir.join(&name);
-        if entry.is_dir() {
-            std::fs::create_dir_all(&out_path)
-                .map_err(|e| format!("mkdir {}: {}", name, e))?;
-        } else {
-            if let Some(parent) = out_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("mkdir parent: {}", e))?;
-            }
-            let mut out_file = std::fs::File::create(&out_path)
-                .map_err(|e| format!("create {}: {}", name, e))?;
-            std::io::copy(&mut entry, &mut out_file)
-                .map_err(|e| format!("extract {}: {}", name, e))?;
-
-            // A .vst3 or .clap on macOS/Linux is a bundle whose inner binary
-            // must stay executable. File::create makes it 0644, so without
-            // restoring the archived mode the plug-in installs cleanly and
-            // then silently fails to load in the DAW.
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mode = entry.unix_mode().unwrap_or(0);
-                // Some zip writers drop modes entirely; fall back to the known
-                // bundle layout rather than shipping a non-executable binary.
-                let needs_exec = mode & 0o111 != 0
-                    || name.contains("Contents/MacOS/")
-                    || name.contains("/x86_64-linux/");
-                let final_mode = if needs_exec { 0o755 } else if mode != 0 { mode } else { 0o644 };
-                let _ = std::fs::set_permissions(
-                    &out_path,
-                    std::fs::Permissions::from_mode(final_mode),
-                );
-            }
-        }
-    }
+    // Betas from before this change sat in the old beta folder, where no DAW
+    // looked. The build is in the plug-in folders now, so remove them.
+    let legacy_root = beta_plugins_root();
+    let _ = std::fs::remove_dir_all(legacy_root.join(slug));
+    let _ = std::fs::remove_dir_all(legacy_root.join(format!("{}.expired", slug)));
     Ok(())
 }
 
-fn extract_tar_gz(archive_path: &Path, dest_dir: &Path) -> Result<(), String> {
-    let file = std::fs::File::open(archive_path).map_err(|e| format!("Open tar: {}", e))?;
-    let gz = flate2::read::GzDecoder::new(file);
-    let mut tar = tar::Archive::new(gz);
-    tar.unpack(dest_dir)
-        .map_err(|e| format!("Extract tar.gz: {}", e))
+/// Forget a plug-in's beta after a stable install or an uninstall replaced it.
+pub fn forget_installed_beta(slug: &str) {
+    let mut all = read_installed_betas();
+    let before = all.len();
+    all.retain(|r| r.slug != slug);
+    if all.len() != before {
+        let _ = write_installed_betas(&all);
+    }
 }
 
 // ── Expiry watcher ──────────────────────────────────────────────────────────
@@ -470,7 +453,10 @@ struct BetaWarningPayload {
 /// Spawn a tokio task that re-checks installed betas every 60 seconds.
 /// Emits `beta:soft-warning` once when a build crosses its soft-warn point
 /// (24h before expiry by default) and `beta:expired` once when it elapses.
-/// Expired builds are renamed to `<slug>.expired` so DAW scans skip them.
+/// An expired build keeps working until the stable build replaces it: it lives
+/// in the real plug-in folder now, and moving it aside would leave the user
+/// with no copy of the plug-in at all. Only builds still in the old beta folder
+/// are renamed to `<slug>.expired`.
 pub fn spawn_expiry_watcher(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
@@ -503,13 +489,15 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
             rec.expired = true;
             dirty = true;
 
-            // Best-effort rename to `<slug>.expired` so DAWs skip the bundle.
+            // Never rename the recorded folder unless it is the old per-slug beta
+            // folder: for a beta in the plug-in folders it is the shared VST3
+            // folder itself, and renaming it would hide every plug-in in it.
             let install_dir = PathBuf::from(&rec.install_dir);
-            if install_dir.exists() {
-                let parent = install_dir.parent().unwrap_or(Path::new("."));
-                let target = parent.join(format!("{}.expired", rec.slug));
-                let _ = std::fs::remove_dir_all(&target);
-                let _ = std::fs::rename(&install_dir, &target);
+            if let Some(target) = legacy_expiry_target(&install_dir, &rec.slug, &beta_plugins_root()) {
+                if install_dir.exists() {
+                    let _ = std::fs::remove_dir_all(&target);
+                    let _ = std::fs::rename(&install_dir, &target);
+                }
             }
 
             let _ = app.emit(
@@ -538,4 +526,86 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
         write_installed_betas(&records)?;
     }
     Ok(())
+}
+
+/// Where an expired build may be moved aside: only an install in the old
+/// `plugins/beta/<slug>` folder, matched exactly.
+fn legacy_expiry_target(install_dir: &Path, slug: &str, legacy_root: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    if !valid_slug(slug) || install_dir.components().any(|c| matches!(c, Component::ParentDir)) {
+        return None;
+    }
+    if install_dir != legacy_root.join(slug) {
+        return None;
+    }
+    Some(legacy_root.join(format!("{}.expired", slug)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn root() -> PathBuf {
+        PathBuf::from("/data/hardwave/plugins/beta")
+    }
+
+    #[test]
+    fn expiry_never_touches_the_plugin_folders() {
+        let system = PathBuf::from("/Program Files/Common Files/VST3");
+        assert_eq!(legacy_expiry_target(&system, "wettboi", &root()), None);
+        let per_user = PathBuf::from("/home/u/.vst3");
+        assert_eq!(legacy_expiry_target(&per_user, "wettboi", &root()), None);
+    }
+
+    #[test]
+    fn expiry_moves_only_the_exact_legacy_folder() {
+        assert_eq!(
+            legacy_expiry_target(&root().join("wettboi"), "wettboi", &root()),
+            Some(root().join("wettboi.expired"))
+        );
+        assert_eq!(legacy_expiry_target(&root(), "wettboi", &root()), None);
+        assert_eq!(legacy_expiry_target(&root().join("loudlab"), "wettboi", &root()), None);
+        assert_eq!(legacy_expiry_target(&root().join("wettboi"), "../wettboi", &root()), None);
+        assert_eq!(
+            legacy_expiry_target(&root().join("x").join("..").join("wettboi"), "wettboi", &root()),
+            None
+        );
+    }
+
+    #[test]
+    fn artefact_filename_accepts_archives_only() {
+        assert_eq!(
+            artefact_filename("https://github.com/o/r/releases/download/v0.4.0-rc1/WettBoi-windows.zip"),
+            Some("WettBoi-windows.zip".into())
+        );
+        assert_eq!(
+            artefact_filename("https://cdn.example/b/plug.tar.gz?sig=abc#x"),
+            Some("plug.tar.gz".into())
+        );
+        assert_eq!(artefact_filename("https://cdn.example/b/plug.exe"), None);
+        assert_eq!(artefact_filename("https://cdn.example/b/"), None);
+        assert_eq!(artefact_filename("https://cdn.example/b/..%2f.zip"), None);
+        assert_eq!(artefact_filename("https://cdn.example/b/a\\..\\x.zip"), None);
+    }
+
+    #[test]
+    fn refuses_builds_for_another_os() {
+        let win = "hardwave-wettboi-windows-x64.zip";
+        assert_eq!(built_for_other_os(win, "windows"), None);
+        assert_eq!(built_for_other_os(win, "macos"), Some("Windows"));
+        let mac = "hardwave-wettboi-macos-universal.zip";
+        assert_eq!(built_for_other_os(mac, "macos"), None);
+        assert_eq!(built_for_other_os(mac, "windows"), Some("macOS"));
+        assert_eq!(built_for_other_os("hardwave-wettboi-linux-x64.zip", "windows"), Some("Linux"));
+        assert_eq!(built_for_other_os("hardwave-wettboi.zip", "macos"), None);
+    }
+
+    #[test]
+    fn slugs_are_plain() {
+        assert!(valid_slug("wettboi"));
+        assert!(valid_slug("hardwave-analyser"));
+        assert!(!valid_slug(""));
+        assert!(!valid_slug("../x"));
+        assert!(!valid_slug("Wett Boi"));
+    }
 }

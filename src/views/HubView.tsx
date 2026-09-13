@@ -18,6 +18,7 @@ import {
 import * as api from '../lib/api'
 import type { Product } from '../lib/api'
 import { isBetaProduct } from '../lib/beta'
+import { isNewerVersion } from '../lib/version'
 
 interface HubViewProps {
   preloadedProducts?: Product[] | null
@@ -207,13 +208,22 @@ export function HubView({
     const installed = products.filter((p) => !!installedVersions[p.slug]).length
     const updates = products.filter((p) => {
       const v = installedVersions[p.slug]
-      return v && v !== p.version
+      return !!v && isNewerVersion(p.version, v)
     }).length
     const beta = products.filter(isBetaProduct).length
     return { total: products.length, installed, updates, beta }
   }, [products, installedVersions])
 
   useEffect(() => { onCountsChange?.(counts) }, [counts, onCountsChange])
+
+  // A beta install changes the registry without going through this view.
+  useEffect(() => {
+    const reload = () => {
+      api.getInstalledVersions().then(setInstalledVersions).catch(() => {})
+    }
+    window.addEventListener(api.INSTALLED_CHANGED_EVENT, reload)
+    return () => window.removeEventListener(api.INSTALLED_CHANGED_EVENT, reload)
+  }, [])
 
   const handleDownload = useCallback(async (product: Product, platform: string, url: string) => {
     const fileId = `${product.id}-${platform}`
@@ -285,7 +295,7 @@ export function HubView({
     } else if (filter === 'updates') {
       list = list.filter((p) => {
         const v = installedVersions[p.slug]
-        return v && v !== p.version
+        return !!v && isNewerVersion(p.version, v)
       })
     } else if (filter === 'beta') {
       list = list.filter(isBetaProduct)
@@ -304,7 +314,7 @@ export function HubView({
   const updatableProducts = useMemo(
     () => products.filter((p) => {
       const v = installedVersions[p.slug]
-      return v && v !== p.version
+      return !!v && isNewerVersion(p.version, v)
     }),
     [products, installedVersions],
   )
@@ -504,7 +514,9 @@ function ProductCard({ product, downloads, installedVersion, onDownload, onOpenF
   const inProgress = status === 'downloading' || status === 'installing'
   const sessionInstalled = status === 'installed'
   const isInstalled = !!installedVersion || sessionInstalled
-  const hasUpdate = !!installedVersion && installedVersion !== product.version
+  const hasUpdate = !!installedVersion && isNewerVersion(product.version, installedVersion)
+  // Running a beta build that is newer than the catalogue's stable version.
+  const onBetaBuild = !!installedVersion && isNewerVersion(installedVersion, product.version)
   const beta = isBetaProduct(product)
 
   const Icon = iconForSlug(product.slug, isSample)
@@ -529,6 +541,11 @@ function ProductCard({ product, downloads, installedVersion, onDownload, onOpenF
   const versionNode = hasUpdate ? (
     <span>
       v{installedVersion} &rarr; <span className={`v ${beta ? 'beta' : 'update'}`}>v{product.version}</span>
+    </span>
+  ) : onBetaBuild ? (
+    <span>
+      <span className="beta-tag">BETA</span>
+      <span className="v beta">v{installedVersion}</span>
     </span>
   ) : (
     <span>
@@ -559,6 +576,18 @@ function ProductCard({ product, downloads, installedVersion, onDownload, onOpenF
         type="button"
       >
         <RefreshCw size={13} /> Update
+      </button>
+    )
+  } else if (onBetaBuild) {
+    primary = (
+      <button
+        className="card-action"
+        onClick={() => platformUrl && onDownload(product, platform, platformUrl)}
+        disabled={actionDisabled}
+        title={`Replace beta v${installedVersion} with the stable v${product.version}`}
+        type="button"
+      >
+        <RefreshCw size={13} /> Back to stable
       </button>
     )
   } else if (isInstalled) {

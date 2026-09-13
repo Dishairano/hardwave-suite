@@ -109,6 +109,10 @@ export async function downloadAndInstall(
 }
 
 // Installed versions registry (slug → version)
+
+/** Fired on window when an install outside the library (a beta build) changed the registry. */
+export const INSTALLED_CHANGED_EVENT = 'hardwave:installed-changed'
+
 export async function getInstalledVersions(): Promise<Record<string, string>> {
   return invoke<Record<string, string>>('get_installed_versions')
 }

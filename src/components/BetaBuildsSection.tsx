@@ -81,6 +81,7 @@ export function BetaBuildsSection({ channel, subscription, onSubscribe }: BetaBu
         ...prev,
         [plugin.pluginSlug]: { status: 'installed', installPath: path },
       }))
+      window.dispatchEvent(new Event(api.INSTALLED_CHANGED_EVENT))
     } catch (e) {
       const msg = typeof e === 'string' ? e : e instanceof Error ? e.message : String(e)
       setInstalls((prev) => ({ ...prev, [plugin.pluginSlug]: { status: 'error', error: msg } }))
@@ -101,7 +102,7 @@ export function BetaBuildsSection({ channel, subscription, onSubscribe }: BetaBu
         </span>
       </div>
       <p className="text-xs text-zinc-500 mb-4 leading-relaxed">
-        Pre-release plug-ins for Hardwave Pro subscribers. Installs to a separate folder so your stable plug-ins are untouched.
+        Pre-release plug-ins for Pro and lifetime members. A beta replaces the installed version in your plug-in folder, so close your DAW first. The plug-in&apos;s card has a Back to stable button.
       </p>
 
       {!eligible ? (
