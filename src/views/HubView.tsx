@@ -164,6 +164,11 @@ export function HubView({
   const [installedVersions, setInstalledVersions] = useState<Record<string, string>>(preloadedVersions ?? {})
   const [lastSync, setLastSync] = useState<Date | null>(hasPreloaded ? new Date() : null)
   const [cleanupBlocked, setCleanupBlocked] = useState<{ slug: string; blocked: api.BlockedCopy[] } | null>(null)
+  // What is actually on this machine, and whether it has ever been opened. 25 licences and one
+  // first open: almost everybody is lost between installing a plug-in and using it once, and the
+  // reason is on the machine (wrong folder, or a first run blocked by SmartScreen or Gatekeeper).
+  const [firstRun, setFirstRun] = useState<api.FirstRunItem[]>([])
+  const [firstRunDismissed, setFirstRunDismissed] = useState(false)
   const [retryingCleanup, setRetryingCleanup] = useState(false)
 
   const loadProducts = useCallback(async () => {
@@ -224,6 +229,16 @@ export function HubView({
     window.addEventListener(api.INSTALLED_CHANGED_EVENT, reload)
     return () => window.removeEventListener(api.INSTALLED_CHANGED_EVENT, reload)
   }, [])
+
+  // Re-read after any install, so the answer matches what is on disk right now.
+  useEffect(() => {
+    const check = () => { api.firstRunCheck().then(setFirstRun).catch(() => {}) }
+    check()
+    window.addEventListener(api.INSTALLED_CHANGED_EVENT, check)
+    return () => window.removeEventListener(api.INSTALLED_CHANGED_EVENT, check)
+  }, [])
+
+  const needsAttention = useMemo(() => firstRun.filter((f) => f.notes.length > 0), [firstRun])
 
   const handleDownload = useCallback(async (product: Product, platform: string, url: string) => {
     const fileId = `${product.id}-${platform}`
@@ -380,6 +395,28 @@ export function HubView({
           )}
         </div>
       </div>
+
+      {!firstRunDismissed && needsAttention.length > 0 && (
+        <div className="update-banner" style={{ alignItems: 'flex-start' }}>
+          <AlertCircle className="update-banner-icon" size={18} />
+          <div className="update-banner-body">
+            <strong>
+              {needsAttention.length === 1
+                ? `${needsAttention[0].name} is installed but not in use yet.`
+                : `${needsAttention.length} plug-ins are installed but not in use yet.`}
+            </strong>
+            {needsAttention.map((f) => (
+              <div key={f.slug} style={{ marginTop: 6 }}>
+                {needsAttention.length > 1 && <strong>{f.name}. </strong>}
+                {f.notes.join(' ')}
+              </div>
+            ))}
+          </div>
+          <button className="update-banner-btn" onClick={() => setFirstRunDismissed(true)} type="button">
+            Got it
+          </button>
+        </div>
+      )}
 
       {filter !== 'installed' && updatableProducts.length > 0 && (
         <div className="update-banner">

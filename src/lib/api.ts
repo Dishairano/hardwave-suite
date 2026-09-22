@@ -153,6 +153,25 @@ export async function removeStalePlugins(paths: string[]): Promise<string[]> {
   return invoke('remove_stale_plugins', { paths })
 }
 
+export interface FirstRunItem {
+  slug: string
+  name: string
+  version: string | null
+  /** Where copies were found, as "system VST3", "per-user CLAP". */
+  places: string[]
+  /** Whether this build is new enough to record that its editor opened. */
+  can_tell: boolean
+  last_opened: string | null
+  /** Ready to show, in plain words. Empty means nothing to say. */
+  notes: string[]
+}
+
+/** Read-only: what is actually on disk, and whether each plug-in has ever been
+ *  opened, from the plug-in's own editor log. Nothing is changed. */
+export async function firstRunCheck(): Promise<FirstRunItem[]> {
+  return invoke<FirstRunItem[]>('first_run_check')
+}
+
 export async function openInstallFolder(category: string): Promise<void> {
   return invoke('open_install_folder', { category })
 }

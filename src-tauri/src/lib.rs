@@ -1112,6 +1112,203 @@ async fn download_and_install(
     Ok(install_path)
 }
 
+/// What the first-run check found for one plug-in.
+#[derive(serde::Serialize)]
+struct FirstRunItem {
+    slug: String,
+    name: String,
+    version: Option<String>,
+    /// Every copy we found, as "<scope> <format>": "system VST3", "per-user CLAP".
+    places: Vec<String>,
+    /// true when we can tell whether it has been opened, which needs a build that
+    /// writes the editor log.
+    can_tell: bool,
+    /// The last time its editor opened, from the plug-in's own log.
+    last_opened: Option<String>,
+    /// Plain-word reasons, ready to show. Empty means nothing to say.
+    notes: Vec<String>,
+}
+
+/// The first version of each plug-in that writes `<data dir>/hardwave/<slug>-editor.log`.
+/// Below these, no log does not mean it was never opened, and the check says nothing.
+fn logs_from(slug: &str) -> Option<&'static str> {
+    Some(match slug {
+        "wettboi" => "0.4.4",
+        "wideboi" => "0.4.3",
+        "loudlab" => "0.7.2",
+        "kickforge" => "0.12.7",
+        "pumpcontrol" => "0.1.6",
+        "analyser" => "1.0.25",
+        _ => return None,
+    })
+}
+
+/// Compare two dotted versions. Anything unparsable sorts low, which makes the
+/// check keep quiet rather than accuse a build it does not understand.
+fn version_at_least(have: &str, want: &str) -> bool {
+    let nums = |v: &str| -> Vec<u32> {
+        v.trim_start_matches('v')
+            .split(['.', '-'])
+            .map(|p| p.parse::<u32>().unwrap_or(0))
+            .collect()
+    };
+    let (a, b) = (nums(have), nums(want));
+    for i in 0..a.len().max(b.len()) {
+        let (x, y) = (*a.get(i).unwrap_or(&0), *b.get(i).unwrap_or(&0));
+        if x != y {
+            return x > y;
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod first_run_tests {
+    use super::version_at_least;
+
+    #[test]
+    fn a_build_old_enough_to_keep_a_log_is_recognised() {
+        assert!(version_at_least("0.4.4", "0.4.4"));
+        assert!(version_at_least("0.4.5", "0.4.4"));
+        assert!(version_at_least("1.0.25", "1.0.25"));
+        assert!(version_at_least("v1.0.26", "1.0.25"));
+        assert!(!version_at_least("0.4.3", "0.4.4"));
+        assert!(!version_at_least("1.0.24", "1.0.25"));
+        // 0.12.7 is above 0.12.6 and above 0.9.9: the parts are numbers, not text.
+        assert!(version_at_least("0.12.7", "0.12.6"));
+        assert!(version_at_least("0.12.7", "0.9.9"));
+    }
+
+    #[test]
+    fn a_release_candidate_counts_as_its_own_version() {
+        // A tester on 0.4.4-rc2 is running the build that writes the log.
+        assert!(version_at_least("0.4.4-rc2", "0.4.4"));
+        assert!(!version_at_least("0.4.3-rc1", "0.4.4"));
+    }
+
+    #[test]
+    fn nonsense_never_makes_the_check_speak() {
+        // Unparsable parts read as 0, so an unknown build stays below the threshold
+        // and the check says nothing rather than accusing the user.
+        assert!(!version_at_least("dev", "0.4.4"));
+        assert!(!version_at_least("", "1.0.25"));
+    }
+}
+
+fn editor_log_path(slug: &str) -> Option<std::path::PathBuf> {
+    dirs::data_dir().map(|d| d.join("hardwave").join(format!("{}-editor.log", slug)))
+}
+
+/// The date on the last line the plug-in wrote, which is "2026-09-22 14:31:07Z ...".
+fn last_opened_from_log(slug: &str) -> Option<String> {
+    let path = editor_log_path(slug)?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let line = text.lines().rev().find(|l| l.len() > 20 && l.starts_with("20"))?;
+    Some(line.split(" [").next().unwrap_or(line).trim().to_string())
+}
+
+/// Does this computer have the plug-in where a DAW will find it, and has it ever been opened?
+///
+/// 25 licences and one first open: the funnel loses almost everybody between installing a
+/// plug-in and using it once, and nothing on the machine ever said why. This looks at what is
+/// actually on disk and at the plug-in's own editor log, and answers in the words a producer
+/// would use. It reads files and reports; it changes nothing.
+#[tauri::command]
+fn first_run_check() -> Vec<FirstRunItem> {
+    let installed = read_installed();
+    let mut found: std::collections::HashMap<String, Vec<String>> = Default::default();
+
+    for (dir, _format, scope) in all_plugin_dirs() {
+        let rd = match std::fs::read_dir(&dir) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            if !name.starts_with("hardwave-") {
+                continue;
+            }
+            let ext = if name.ends_with(".vst3") {
+                "VST3"
+            } else if name.ends_with(".clap") {
+                "CLAP"
+            } else {
+                continue;
+            };
+            let slug = name
+                .trim_start_matches("hardwave-")
+                .trim_end_matches(".vst3")
+                .trim_end_matches(".clap")
+                .to_string();
+            let place = format!("{} {}", scope, ext);
+            found.entry(slug).or_default().push(place);
+        }
+    }
+
+    let mut slugs: Vec<String> = installed.keys().cloned().collect();
+    for k in found.keys() {
+        if !slugs.contains(k) {
+            slugs.push(k.clone());
+        }
+    }
+    slugs.sort();
+
+    slugs
+        .into_iter()
+        .map(|slug| {
+            let version = installed.get(&slug).cloned();
+            let mut places = found.get(&slug).cloned().unwrap_or_default();
+            places.sort();
+            places.dedup();
+
+            let can_tell = match (logs_from(&slug), version.as_deref()) {
+                (Some(first), Some(v)) => version_at_least(v, first),
+                _ => false,
+            };
+            let last_opened = last_opened_from_log(&slug);
+
+            let mut notes = Vec::new();
+            if places.is_empty() {
+                notes.push(
+                    "The Suite has this plug-in on its list, but no copy of it is in any folder a DAW scans. Install it again from the Plug-ins tab."
+                        .to_string(),
+                );
+            } else {
+                #[cfg(target_os = "windows")]
+                {
+                    let has_system = places.iter().any(|p| p.starts_with("system"));
+                    if !has_system {
+                        notes.push(
+                            "This copy is in your personal plug-in folder. FL Studio only scans the shared one, so it will not appear there. The Suite can put a copy in the shared folder from Settings."
+                                .to_string(),
+                        );
+                    }
+                }
+                if can_tell && last_opened.is_none() {
+                    notes.push(
+                        "It is installed and it has never been opened. The usual reason is the first run being blocked: on Windows SmartScreen says it protected your PC (click More info, then Run anyway), and on macOS you have to right-click the app and choose Open. After that, rescan your plug-ins in your DAW."
+                            .to_string(),
+                    );
+                }
+            }
+
+            FirstRunItem {
+                name: slug
+                    .chars()
+                    .enumerate()
+                    .map(|(i, c)| if i == 0 { c.to_ascii_uppercase() } else { c })
+                    .collect(),
+                slug,
+                version,
+                places,
+                can_tell,
+                last_opened,
+                notes,
+            }
+        })
+        .collect()
+}
+
 #[tauri::command]
 fn get_installed_versions() -> std::collections::HashMap<String, String> {
     read_installed()
@@ -1918,6 +2115,7 @@ pub fn run() {
             get_purchases,
             download_and_install,
             get_installed_versions,
+            first_run_check,
             uninstall_plugin,
             scan_stale_plugins,
             remove_stale_plugins,
