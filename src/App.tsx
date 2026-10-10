@@ -259,6 +259,7 @@ export default function App() {
         preloadedVersions={preloadedVersions}
         onOpenSettings={() => setSettingsOpen(true)}
         onSignOut={handleLogout}
+        onSettingsChanged={loadChannelAndSubscription}
       />
 
       <SettingsPanel
