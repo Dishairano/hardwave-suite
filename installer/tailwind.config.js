@@ -11,8 +11,8 @@ export default {
           border: "rgba(255,255,255,0.08)",
           text: "#f0f0f5",
           mute: "#9ca0a8",
-          accent: "#E85D00",
-          accent2: "#ff7a1f",
+          accent: "#DC2626",
+          accent2: "#EF4444",
         },
       },
       fontFamily: {
@@ -26,7 +26,7 @@ export default {
         ],
       },
       boxShadow: {
-        glow: "0 0 40px rgba(232, 93, 0, 0.25)",
+        glow: "0 0 40px rgba(220, 38, 38, 0.25)",
       },
       animation: {
         "spin-slow": "spin 8s linear infinite",

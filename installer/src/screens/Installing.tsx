@@ -1,87 +1,45 @@
-import { motion } from "framer-motion";
-import { HwLogo } from "../components/HwLogo";
-import type { InstallProgress } from "../lib/api";
+import { motion } from 'framer-motion'
+import type { InstallProgress } from '../lib/api'
 
 interface Props {
-  progress: InstallProgress;
-  error: string | null;
-  onRetry: () => void;
-  onCancel: () => void;
+  progress: InstallProgress
+  version: string | null
+  error: string | null
+  onRetry: () => void
+  onCancel: () => void
 }
 
-const PHASE_LABEL: Record<string, string> = {
-  downloading: "Downloading",
-  extracting: "Extracting",
-  shortcuts: "Creating shortcuts",
-  registering: "Finalising",
-  done: "Complete",
-};
+const ORDER: InstallProgress['phase'][] = ['downloading', 'extracting', 'shortcuts', 'registering', 'done']
 
-export function Installing({ progress, error, onRetry, onCancel }: Props) {
-  const pct = Math.max(0, Math.min(100, progress.percent));
+/** Where the install is, as a bar and the steps, with the last line of what happened. */
+export function Installing({ progress, version, error, onRetry, onCancel }: Props) {
+  const pct = Math.max(0, Math.min(100, Math.round(progress.percent)))
+  const at = ORDER.indexOf(progress.phase)
+  const steps: Array<[string, number]> = [
+    [version ? `Download Hardwave ${version}` : 'Download Hardwave', 0],
+    ['Unpack', 1],
+    ['Shortcuts', 2],
+    ['Ready to sign in', 3],
+  ]
+  const cls = (i: number) => (error ? (i < at ? 'd' : 'w') : i < at ? 'd' : i === at ? 'n' : 'w')
 
   return (
-    <motion.div
-      initial={{ opacity: 0, x: 20 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: -20 }}
-      transition={{ duration: 0.35 }}
-      className="absolute inset-0 flex flex-col items-center justify-center px-10 pt-12 pb-8"
-    >
-      <motion.div
-        animate={!error ? { scale: [1, 1.04, 1] } : {}}
-        transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
-      >
-        <HwLogo size={88} glow />
-      </motion.div>
-
-      <div className="mt-6 text-center">
-        <div className="text-[10px] tracking-[0.28em] text-white/40 uppercase font-medium">
-          {error ? "Install failed" : PHASE_LABEL[progress.phase] ?? "Installing"}
+    <motion.div initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -16 }} transition={{ duration: 0.3 }} className="screen">
+      <div className="ib">
+        <div className={`cap${error ? ' bad' : ''}`}>{error ? 'Install failed' : `Installing · ${pct}%`}</div>
+        <h1 className="t">{error ? 'Something went wrong.' : pct < 90 ? 'Almost there.' : 'Finishing up.'}</h1>
+        {!error && <div className="bar"><i style={{ width: `${pct}%` }} /></div>}
+        <div className="ph">
+          {steps.map(([label, i]) => <div key={label} className={cls(i)}>{label}</div>)}
         </div>
-        <div className="mt-1 text-lg font-semibold tracking-tight max-w-[480px] truncate">
-          {error ? "Something went wrong" : progress.message || "Please wait…"}
+        {error
+          ? <div className="errbox">{error}</div>
+          : <div className="logrow">{progress.message || 'Starting…'}</div>}
+        <div className="ft">
+          <button type="button" className="ibtn ghost" onClick={onCancel}>{error ? 'Exit' : 'Cancel'}</button>
+          {error && <button type="button" className="ibtn" onClick={onRetry}>Try again</button>}
         </div>
       </div>
-
-      {/* Progress bar */}
-      {!error && (
-        <div className="mt-8 w-full max-w-md">
-          <div className="h-2 bg-white/[0.06] rounded-full overflow-hidden">
-            <motion.div
-              className="h-full hw-accent-gradient"
-              animate={{ width: `${pct}%` }}
-              transition={{ type: "spring", stiffness: 80, damping: 18 }}
-            />
-          </div>
-          <div className="mt-2 flex justify-between text-[10px] text-white/40 uppercase tracking-wider">
-            <span>{pct}%</span>
-            <span>{progress.phase}</span>
-          </div>
-        </div>
-      )}
-
-      {error && (
-        <div className="mt-6 w-full max-w-md">
-          <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-xs text-red-200 hw-scroll max-h-24 overflow-auto">
-            {error}
-          </div>
-          <div className="mt-4 flex items-center justify-center gap-3">
-            <button
-              onClick={onCancel}
-              className="text-white/60 hover:text-white text-xs font-medium px-4 py-2 transition"
-            >
-              Exit
-            </button>
-            <button
-              onClick={onRetry}
-              className="hw-accent-gradient text-black font-semibold px-5 py-2 rounded-lg text-xs shadow-glow hover:brightness-110 transition"
-            >
-              Try again
-            </button>
-          </div>
-        </div>
-      )}
     </motion.div>
-  );
+  )
 }
