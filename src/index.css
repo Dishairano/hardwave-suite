@@ -704,3 +704,124 @@ html, body, #root {
 .beta-wrapper {
   padding: 24px 26px 36px;
 }
+
+/* ============================================================
+   A2 shell (2026-10): sidebar, the seven screens, tiles
+   ============================================================ */
+.a2 { --line: rgba(255,255,255,.07); --line2: rgba(255,255,255,.12); --faint: #6b6b73; --dim: #a1a1aa; --muted: #d4d4d8; }
+.a2 { display: grid; grid-template-columns: 236px 1fr; height: 100%; min-height: 0; }
+.a2-side { background: #0d0d0f; border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 18px 12px; min-height: 0; }
+.a2-brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; font: 900 15px var(--display); letter-spacing: .04em; color: var(--text); }
+.a2-nav { display: flex; flex-direction: column; gap: 2px; }
+.a2-nav .gap { height: 14px; }
+.a2-nav-link { all: unset; cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 9px; font: 500 14px var(--body); color: var(--dim); }
+.a2-nav-link:hover { background: rgba(255,255,255,.04); color: var(--text); }
+.a2-nav-link.on { background: rgba(255,255,255,.07); color: var(--text); font-weight: 600; }
+.a2-nav-link .dotb { margin-left: auto; width: 7px; height: 7px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 8px var(--brand); }
+.a2-me-row { margin-top: auto; display: flex; gap: 6px; align-items: stretch; }
+.a2-me { all: unset; cursor: pointer; flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 10px; background: var(--surface-1); border: 1px solid var(--line); }
+.a2-me .av { width: 32px; height: 32px; border-radius: 50%; background: var(--brand); display: flex; align-items: center; justify-content: center; font: 700 13px var(--body); color: #fff; }
+.a2-me b { display: block; font-size: 13.5px; color: var(--text); }
+.a2-me span span { font: 600 10.5px var(--mono); color: #fca5a5; }
+.a2-out { all: unset; cursor: pointer; display: flex; align-items: center; justify-content: center; width: 36px; border-radius: 10px; border: 1px solid var(--line); color: var(--dim); }
+.a2-out:hover { color: var(--text); background: rgba(255,255,255,.05); }
+.a2-content { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.a2-main { flex: 1; overflow: auto; padding: 22px 28px; display: flex; flex-direction: column; gap: 20px; font-weight: 400; }
+.a2-main section { display: flex; flex-direction: column; }
+.a2-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: 9px; font: 600 13.5px var(--body); border: 1px solid transparent; white-space: nowrap; cursor: pointer; background: transparent; color: var(--text); }
+.a2-btn.red { background: var(--brand); color: #fff; }
+.a2-btn.red:hover { background: var(--brand-hover); }
+.a2-btn.purple { background: var(--accent); color: #fff; }
+.a2-btn.amber { background: var(--warning); color: #1a1206; }
+.a2-btn.ghost { border-color: var(--line2); }
+.a2-btn.ghost:hover { background: rgba(255,255,255,.05); }
+.a2-btn.sm { height: 28px; padding: 0 10px; font-size: 12.5px; border-radius: 8px; }
+.a2-btn:disabled { opacity: .45; cursor: default; }
+.a2 .chip { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 999px; font: 600 11px var(--mono); }
+.a2 .chip.ok { background: rgba(74,222,128,.12); color: #86efac; }
+.a2 .chip.beta { background: rgba(168,85,247,.16); color: #d8b4fe; }
+.a2-card { background: var(--surface-1); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; }
+.a2-card.warn { border-color: rgba(245,158,11,.4); }
+.a2-card .k { font: 600 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--faint); margin-bottom: 6px; }
+.a2-card h3 { margin: 0 0 4px; font: 700 17px var(--body); color: var(--text); }
+.a2-card p { margin: 0; color: var(--dim); font-size: 13.5px; line-height: 1.5; }
+.a2-card ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 13.5px; line-height: 1.7; }
+.a2-card .row { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
+.a2 .kv { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+.a2 .kv span { color: var(--faint); }
+.a2 .kv b { font-weight: 600; color: var(--muted); font-family: var(--mono); font-size: 12.5px; text-align: right; word-break: break-all; }
+.a2 .kbd { font: 600 11.5px var(--mono); background: #1d1d21; border: 1px solid var(--line2); border-radius: 5px; padding: 1px 5px; color: var(--text); }
+/* home */
+.a2 .stat { display: flex; align-items: center; gap: 12px; font-size: 14.5px; color: var(--muted); }
+.a2 .stat .ok { width: 26px; height: 26px; border-radius: 50%; background: rgba(74,222,128,.12); color: var(--success); display: flex; align-items: center; justify-content: center; font-size: 14px; flex: none; }
+.a2 .stat .ok.warn { background: rgba(220,38,38,.14); color: #fca5a5; }
+.a2 .stat b { color: var(--text); }
+.a2 .stat .sp { flex: 1; }
+.a2 .stat .lnk { all: unset; cursor: pointer; color: #fca5a5; font-weight: 600; font-size: 14px; }
+.a2 .nx { display: grid; grid-template-columns: 1.1fr 1fr; border-radius: 16px; overflow: hidden; border: 1px solid var(--line2); background: var(--surface-1); }
+.a2 .nx .l { padding: 22px 24px; border-left: 3px solid var(--warning); }
+.a2 .nx .k { font: 600 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: #fcd34d; }
+.a2 .nx h3 { margin: 6px 0 6px; font: 800 24px/1.15 var(--display); color: var(--text); }
+.a2 .nx p { margin: 0; color: var(--dim); font-size: 14px; line-height: 1.5; }
+.a2 .nx .acts { display: flex; gap: 8px; margin-top: 16px; }
+.a2 .nx .r { padding: 20px 22px; background: #0f0f12; border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 12px; }
+.a2 .seg2 { display: flex; gap: 4px; background: #000; border: 1px solid var(--line2); border-radius: 10px; padding: 3px; align-self: flex-start; }
+.a2 .seg2 span { padding: 6px 11px; border-radius: 7px; font: 600 12.5px var(--body); color: var(--dim); cursor: pointer; }
+.a2 .seg2 span.on { background: var(--text); color: #0a0a0a; }
+.a2 .how { display: grid; gap: 8px; }
+.a2 .how > div { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); }
+.a2 .how > div > i { width: 22px; height: 22px; border-radius: 50%; background: var(--surface-3); color: var(--text); font: 700 12px var(--body); display: flex; align-items: center; justify-content: center; font-style: normal; flex: none; }
+.a2 .shelfh { display: flex; align-items: baseline; justify-content: space-between; }
+.a2 .shelfh h2 { margin: 0; font: 800 18px var(--display); color: var(--text); }
+.a2 .shelf-link { all: unset; cursor: pointer; color: var(--dim); font-size: 13px; }
+.a2 .shelf-link:hover { color: var(--text); }
+.a2 .shelf { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 10px; }
+.a2 .pc { position: relative; border-radius: 14px; overflow: hidden; aspect-ratio: 4 / 3; background: #000; border: 1px solid var(--line); }
+.a2 .pc img, .a2 .pc video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.a2 .pc .ph { position: absolute; inset: 0; background: radial-gradient(circle at 30% 30%, #4c1d95, transparent 60%), radial-gradient(circle at 80% 70%, #7f1d1d, transparent 60%), #0b0b0d; }
+.a2 .pc:after { content: ""; position: absolute; inset: 0; background: linear-gradient(to top, rgba(5,5,7,.96) 18%, rgba(5,5,7,.35) 55%, transparent 80%); }
+.a2 .pc .in { position: absolute; left: 16px; right: 16px; bottom: 14px; z-index: 2; display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; }
+.a2 .pc h4 { margin: 0; font: 900 24px var(--display); color: var(--text); }
+.a2 .pc .s { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); margin-top: 4px; }
+.a2 .pc .s i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.a2 .pc .live { position: absolute; top: 12px; left: 12px; z-index: 2; font: 600 10.5px var(--mono); color: #86efac; background: rgba(0,0,0,.6); border-radius: 999px; padding: 3px 8px; }
+.a2 .pro3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
+.a2 .pro3 > div { display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 12px; background: var(--surface-1); border: 1px solid var(--line); min-width: 0; }
+.a2 .pro3 img, .a2 .pro3 .ph { width: 76px; height: 48px; border-radius: 8px; object-fit: cover; flex: none; display: block; }
+.a2 .pro3 .ph { background: linear-gradient(135deg, #3b0764, #7f1d1d); }
+.a2 .pro3 b { font-size: 14px; display: block; color: var(--text); }
+.a2 .pro3 small { color: var(--faint); font-size: 12px; }
+.a2 .pro3 .a2-btn, .a2 .pro3 .chip { margin-left: auto; }
+.a2 .lines3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
+.a2 .lines3 button { all: unset; cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 12px; background: var(--surface-1); border: 1px solid var(--line); color: var(--text); position: relative; overflow: hidden; }
+.a2 .lines3 button:before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--c); }
+.a2 .lines3 img { height: 20px; width: auto; display: block; }
+.a2 .lines3 span { font-size: 12.5px; color: var(--dim); display: block; margin-top: 3px; }
+.a2 .lines3 em { margin-left: auto; color: var(--faint); font-style: normal; }
+/* page heads, filters, details */
+.a2 .ph1 { font: 900 28px var(--display); margin: 0; color: var(--text); }
+.a2 .phd { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.a2 .phd p { margin: 4px 0 0; color: var(--dim); font-size: 14.5px; }
+.a2 .fil { display: flex; gap: 6px; flex-wrap: wrap; }
+.a2 .fil span { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line2); font: 600 12.5px var(--body); color: var(--dim); cursor: pointer; }
+.a2 .fil span.on { background: var(--text); color: #0a0a0a; border-color: var(--text); }
+.a2 .det { display: grid; grid-template-columns: 1.3fr 1fr; gap: 12px; }
+.a2 .big2 { display: grid; grid-template-columns: 1.2fr 1fr; gap: 14px; }
+.a2 .hero2 { position: relative; border-radius: 16px; overflow: hidden; border: 1px solid var(--line2); min-height: 250px; background: #000; }
+.a2 .hero2 > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .75; }
+.a2 .hero2:after { content: ""; position: absolute; inset: 0; background: linear-gradient(to top, rgba(5,5,7,.95) 25%, transparent 75%); }
+.a2 .hero2 .in { position: absolute; left: 20px; right: 20px; bottom: 18px; z-index: 2; }
+.a2 .hero2 .in img.lg { height: 26px; width: auto; display: block; }
+.a2 .hero2 .in p { margin: 6px 0 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.a2 .guides { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.a2 .guides button { all: unset; cursor: pointer; display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border-radius: 12px; background: var(--surface-1); border: 1px solid var(--line); color: var(--text); }
+.a2 .guides button:hover { border-color: var(--line2); }
+.a2 .guides small { font: 600 10.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+.a2 .guides b { font-size: 14px; line-height: 1.35; }
+.a2 .files { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--surface-1); display: flex; flex-direction: column; }
+.a2 .files button { all: unset; cursor: pointer; display: grid; grid-template-columns: 44px 1fr 90px 24px; gap: 10px; align-items: center; padding: 10px 14px; border-top: 1px solid var(--line); font-size: 13.5px; color: var(--text); }
+.a2 .files button:first-child { border-top: 0; }
+.a2 .files button:hover { background: rgba(255,255,255,.03); }
+.a2 .files i.faq { font: 600 10.5px var(--mono); font-style: normal; padding: 3px 6px; border-radius: 5px; text-align: center; background: rgba(251,191,36,.12); color: #fcd34d; }
+.a2 .files em { color: var(--faint); font-style: normal; text-align: right; }
+@media (max-width: 980px) { .a2 .shelf, .a2 .pro3, .a2 .lines3, .a2 .guides, .a2 .det, .a2 .big2 { grid-template-columns: 1fr 1fr; } .a2 .nx { grid-template-columns: 1fr; } .a2 .nx .r { border-left: 0; border-top: 1px solid var(--line); } }
