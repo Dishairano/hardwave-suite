@@ -1,14 +1,11 @@
-import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import { Search, LogOut } from 'lucide-react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { LoginScreen } from './components/LoginScreen'
 import { SplashScreen } from './components/SplashScreen'
 import { Onboarding } from './components/Onboarding'
-import { HubView, type HubCounts } from './views/HubView'
+import { Shell } from './components/Shell'
 import { UpdateModal } from './components/UpdateModal'
 import { CrashReportModal } from './components/CrashReportModal'
-import { Sidebar, type SidebarView } from './components/Sidebar'
 import { SettingsPanel } from './components/SettingsPanel'
-import { BetaBuildsSection } from './components/BetaBuildsSection'
 import { getVersion } from '@tauri-apps/api/app'
 import * as api from './lib/api'
 import type { Product, SubscriptionInfo, UpdateChannel, UserTheme } from './lib/api'
@@ -48,13 +45,9 @@ export default function App() {
   const initRan = useRef(false)
 
   // Shell-level UI state
-  const [view, setView] = useState<SidebarView>('plugins')
-  const [search, setSearch] = useState('')
-  const [counts, setCounts] = useState<HubCounts>({ total: 0, installed: 0, updates: 0, beta: 0 })
   const [appVersion, setAppVersion] = useState('')
-  const [lastSync, setLastSync] = useState<Date | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [updateChannel, setUpdateChannel] = useState<UpdateChannel>('stable')
+  const [, setUpdateChannel] = useState<UpdateChannel>('stable')
   const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null)
   const [userTheme, setUserTheme] = useState<UserTheme | null>(null)
 
@@ -97,7 +90,6 @@ export default function App() {
           ])
           setPreloadedProducts(prods)
           setPreloadedVersions(installed)
-          setLastSync(new Date())
         } catch {
           /* HubView will load as a fallback */
         }
@@ -159,14 +151,6 @@ export default function App() {
   const handleThemeChange = useCallback((next: UserTheme | null) => {
     setUserTheme(next)
     applyTheme(next)
-  }, [])
-
-  const handleSubscribe = useCallback(async () => {
-    try {
-      await api.openExternalUrl('https://hardwavestudios.com/pricing')
-    } catch {
-      window.open('https://hardwavestudios.com/pricing', '_blank')
-    }
   }, [])
 
   const checkForUpdates = async () => {
@@ -246,16 +230,6 @@ export default function App() {
     setShowSplash(false)
   }, [])
 
-  const handleSidebarSelect = useCallback((next: SidebarView) => {
-    if (next === 'settings') {
-      setSettingsOpen(true)
-      return
-    }
-    setView(next)
-  }, [])
-
-  const lastSyncLabel = useMemo(() => formatLastSync(lastSync), [lastSync])
-
   if (showSplash) {
     return <SplashScreen dataReady={dataReady} onFinished={handleSplashFinished} />
   }
@@ -268,160 +242,24 @@ export default function App() {
     return <Onboarding onComplete={handleOnboardingComplete} />
   }
 
-  // Map sidebar view → content props. Beta builds is a filtered view of the
-  // same product grid (only plug-ins where isBetaProduct(p) === true). Beta
-  // plug-ins still appear on Plug-ins / Installed / Updates because they're
-  // in the same product list — this tab just narrows to the beta cohort.
-  const filter: 'all' | 'installed' | 'updates' | 'beta' =
-    view === 'installed' ? 'installed'
-    : view === 'updates' ? 'updates'
-    : view === 'beta' ? 'beta'
-    : 'all'
-
-  const topbarTitle = topbarTitleFor(view)
-  const topbarMeta = topbarMetaFor(view, counts)
-
-  const showHub = view === 'plugins' || view === 'installed' || view === 'updates' || view === 'beta'
-  const showHelp = view === 'help'
-
   return (
     <div className="app-shell">
-      {/* Tauri title bar — drag region only. Native OS window controls
-          (Windows ⨯ □ ─ on the right, macOS traffic lights top-left) are
-          rendered by the OS via `decorations: true` in tauri.conf.json,
-          so we don't paint our own. The 32px strip is just a draggable
-          ribbon with the app name. */}
+      {/* Tauri title bar: a drag region only. The OS draws the window
+          controls (decorations: true in tauri.conf.json). */}
       <div className="titlebar" data-tauri-drag-region>
-        <div className="tb-title">Hardwave Suite</div>
+        <div className="tb-title">Hardwave</div>
         <div className="tb-version">{appVersion ? `v${appVersion}` : ''}</div>
       </div>
 
-      <div className="shell">
-        <Sidebar
-          active={view}
-          onSelect={handleSidebarSelect}
-          updateCount={counts.updates}
-          betaCount={counts.beta}
-          user={user}
-          onAccountClick={() => setSettingsOpen(true)}
-        />
-
-        <main className="main">
-          <div className="topbar">
-            <div className="topbar-title">{topbarTitle}</div>
-            <div className="topbar-meta">{topbarMeta}</div>
-            <div className="search">
-              <Search size={13} />
-              <input
-                placeholder="Search plug-ins…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              <span className="kbd">⌘K</span>
-            </div>
-            <button
-              className="btn"
-              onClick={handleLogout}
-              type="button"
-              title={`Sign out (${user.email})`}
-            >
-              <LogOut size={13} />
-              Sign out
-            </button>
-          </div>
-
-          {showHub && (
-            <div className="content">
-              {view === 'beta' && (
-                /* Channel switcher + subscription gating sits above the card
-                   grid. Tells the user whether they're on stable or beta auto-
-                   updates and offers Pro upgrade if not subscribed. The actual
-                   per-plug-in beta builds render as cards below. */
-                <BetaBuildsSection
-                  channel={updateChannel}
-                  subscription={subscription}
-                  onSubscribe={handleSubscribe}
-                />
-              )}
-              <HubView
-                preloadedProducts={preloadedProducts}
-                preloadedVersions={preloadedVersions}
-                filter={filter}
-                search={search}
-                onCountsChange={setCounts}
-                onLastSyncChange={setLastSync}
-              />
-            </div>
-          )}
-
-          {showHelp && (
-            <div className="content">
-              <div className="help-panel">
-                <h2>Help &amp; bugs</h2>
-                <p>
-                  Need a hand? The fastest paths:
-                </p>
-                <p>
-                  <a
-                    href="https://hardwavestudios.com/support"
-                    onClick={(e) => {
-                      e.preventDefault()
-                      api.openExternalUrl('https://hardwavestudios.com/support').catch(() => {
-                        window.open('https://hardwavestudios.com/support', '_blank')
-                      })
-                    }}
-                  >
-                    Open the support hub
-                  </a>{' '}
-                  for guides, FAQs and contact options.
-                </p>
-                <p>
-                  Found a bug? Send a crash report from the plug-in window if you have one — otherwise email{' '}
-                  <a
-                    href="mailto:support@hardwavestudios.com"
-                    onClick={(e) => {
-                      e.preventDefault()
-                      api.openExternalUrl('mailto:support@hardwavestudios.com').catch(() => {
-                        window.open('mailto:support@hardwavestudios.com', '_blank')
-                      })
-                    }}
-                  >
-                    support@hardwavestudios.com
-                  </a>{' '}
-                  with the build version and steps to reproduce.
-                </p>
-                <p>
-                  Pre-release testers: report beta issues in the Discord <strong>#beta-testers</strong> channel.{' '}
-                  <a
-                    href="https://discord.gg/hardwave"
-                    onClick={(e) => {
-                      e.preventDefault()
-                      api.openExternalUrl('https://discord.gg/hardwave').catch(() => {
-                        window.open('https://discord.gg/hardwave', '_blank')
-                      })
-                    }}
-                  >
-                    Open Discord
-                  </a>
-                </p>
-              </div>
-            </div>
-          )}
-
-          <div className="statusbar">
-            <span className="pip" />
-            <span>CONNECTED</span>
-            <span className="sb-sep">·</span>
-            <span>
-              {counts.installed} installed · {counts.updates} update{counts.updates === 1 ? '' : 's'} · {counts.beta} in beta
-            </span>
-            <span className="sb-tail">
-              {appVersion ? `v${appVersion}` : ''}
-              {lastSyncLabel && ` — last sync ${lastSyncLabel}`}
-            </span>
-          </div>
-        </main>
-      </div>
+      <Shell
+        user={user}
+        subscription={subscription}
+        appVersion={appVersion}
+        preloadedProducts={preloadedProducts}
+        preloadedVersions={preloadedVersions}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onSignOut={handleLogout}
+      />
 
       <SettingsPanel
         open={settingsOpen}
@@ -454,38 +292,3 @@ export default function App() {
   )
 }
 
-function topbarTitleFor(view: SidebarView): string {
-  switch (view) {
-    case 'installed':
-      return 'Installed'
-    case 'updates':
-      return 'Updates'
-    case 'beta':
-      return 'Beta builds'
-    case 'help':
-      return 'Help & bugs'
-    case 'settings':
-      return 'Settings'
-    default:
-      return 'Plug-ins'
-  }
-}
-
-function topbarMetaFor(view: SidebarView, c: HubCounts): string {
-  if (view === 'beta') return `${c.beta} in beta`
-  if (view === 'installed') return `${c.installed} installed`
-  if (view === 'updates') return `${c.updates} update${c.updates === 1 ? '' : 's'} available`
-  return `${c.total} in catalogue · ${c.installed} installed · ${c.updates} update${c.updates === 1 ? '' : 's'} · ${c.beta} in beta`
-}
-
-function formatLastSync(date: Date | null): string {
-  if (!date) return ''
-  const diffSec = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000))
-  if (diffSec < 5) return 'just now'
-  if (diffSec < 60) return `${diffSec}s ago`
-  const min = Math.round(diffSec / 60)
-  if (min < 60) return `${min} min${min === 1 ? '' : 's'} ago`
-  const hr = Math.round(min / 60)
-  if (hr < 24) return `${hr}h ago`
-  return date.toLocaleString()
-}
