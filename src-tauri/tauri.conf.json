@@ -45,7 +45,8 @@
         "template": "nsis/installer.nsi",
         "headerImage": "nsis/header.bmp",
         "sidebarImage": "nsis/sidebar.bmp"
-      }
+      },
+      "signCommand": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../scripts/sign-windows.ps1 %1"
     },
     "macOS": {
       "signingIdentity": "-"

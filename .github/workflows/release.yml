@@ -91,30 +91,16 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-
-      - name: Sign Windows binaries
-        if: matrix.platform == 'windows-latest' && env.WINDOWS_CERTIFICATE != ''
-        env:
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        shell: powershell
-        run: |
-          $certBytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
-          $certPath = Join-Path $env:RUNNER_TEMP "certificate.pfx"
-          [IO.File]::WriteAllBytes($certPath, $certBytes)
-
-          $cert = Import-PfxCertificate -FilePath $certPath `
-            -CertStoreLocation Cert:\CurrentUser\My `
-            -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force)
-          $thumbprint = $cert.Thumbprint
-
-          # Sign all .exe and .msi files in the bundle directory
-          Get-ChildItem -Path src-tauri/target/release/bundle -Recurse -Include *.exe,*.msi | ForEach-Object {
-            & signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /sha1 $thumbprint $_.FullName
-            Write-Output "Signed: $($_.Name)"
-          }
-
-          Remove-Item $certPath -Force
+          # Azure Trusted Signing, the same way the DAW signs: Tauri runs scripts/sign-windows.ps1 on
+          # every file it bundles, before the updater signature is taken. On a release tag a missing
+          # setting stops the build: nothing ships unsigned. Without the settings a manual build is
+          # left unsigned and says so.
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
 
       - name: Create portable Windows zip
         if: matrix.platform == 'windows-latest'
@@ -160,23 +146,19 @@ jobs:
           Copy-Item $installerExe.FullName "HardwaveSuite-Setup.exe"
           Get-Item HardwaveSuite-Setup.exe | Select-Object Name,Length
 
+      # Built with --no-bundle, so Tauri's signing never sees it: signed here, with the same script
+      # and the same rule (a release that cannot be signed stops).
       - name: Sign HardwaveSuite-Setup.exe
-        if: matrix.platform == 'windows-latest' && env.WINDOWS_CERTIFICATE != ''
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
         env:
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        shell: powershell
-        run: |
-          $certBytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
-          $certPath = Join-Path $env:RUNNER_TEMP "installer-cert.pfx"
-          [IO.File]::WriteAllBytes($certPath, $certBytes)
-
-          $cert = Import-PfxCertificate -FilePath $certPath `
-            -CertStoreLocation Cert:\CurrentUser\My `
-            -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force)
-
-          & signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /sha1 $cert.Thumbprint HardwaveSuite-Setup.exe
-          Remove-Item $certPath -Force
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
+        run: ./scripts/sign-windows.ps1 HardwaveSuite-Setup.exe
 
       - name: Upload Windows artifacts
         if: startsWith(github.ref, 'refs/tags/') && (matrix.platform == 'windows-latest')
