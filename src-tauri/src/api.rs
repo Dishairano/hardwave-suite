@@ -16,12 +16,10 @@ pub async fn login(email: &str, password: &str) -> Result<AuthResponse, String> 
         .await
         .map_err(|e| format!("Failed to read login response: {}", e))?;
 
+    // Never put the response body in the error: a login response can carry the auth token, and the
+    // error text ends up in logs and on screen. The length is enough to tell an empty reply from HTML.
     serde_json::from_str::<AuthResponse>(&body).map_err(|e| {
-        format!(
-            "Login parse error: {} | body: {}",
-            e,
-            &body[..body.len().min(500)]
-        )
+        format!("Login parse error: {} (response of {} bytes)", e, body.len())
     })
 }
 
