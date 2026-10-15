@@ -59,11 +59,7 @@ pub async fn get_downloads(token: &str) -> Result<Vec<Product>, String> {
         .map_err(|e| format!("Failed to read downloads response: {}", e))?;
 
     let data = serde_json::from_str::<DownloadsResponse>(&body).map_err(|e| {
-        format!(
-            "Downloads parse error: {} | body: {}",
-            e,
-            &body[..body.len().min(500)]
-        )
+        format!("Downloads parse error: {} (response of {} bytes)", e, body.len())
     })?;
 
     if !data.success {
