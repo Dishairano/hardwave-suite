@@ -5,10 +5,10 @@ mod bridge;
 mod collabs;
 mod models;
 
+use futures_util::StreamExt;
 use models::DownloadProgress;
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, State};
-use futures_util::StreamExt;
 use tokio::io::AsyncWriteExt;
 
 pub struct AppState {
@@ -130,11 +130,18 @@ fn default_vst3_dir() -> std::path::PathBuf {
     {
         // ~/Library/Audio/Plug-Ins/VST3
         dirs::home_dir()
-            .map(|p| p.join("Library").join("Audio").join("Plug-Ins").join("VST3"))
+            .map(|p| {
+                p.join("Library")
+                    .join("Audio")
+                    .join("Plug-Ins")
+                    .join("VST3")
+            })
             .unwrap_or_else(|| std::path::PathBuf::from("/Library/Audio/Plug-Ins/VST3"))
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    { dirs::home_dir().unwrap_or_default().join(".vst3") }
+    {
+        dirs::home_dir().unwrap_or_default().join(".vst3")
+    }
 }
 
 fn default_sample_dir() -> std::path::PathBuf {
@@ -155,14 +162,19 @@ fn default_sample_dir() -> std::path::PathBuf {
 /// used for enumeration and for mirroring the build into the per-user folder.
 fn preferred_install_vst3_dir() -> std::path::PathBuf {
     #[cfg(target_os = "windows")]
-    { std::path::PathBuf::from(r"C:\Program Files\Common Files\VST3") }
+    {
+        std::path::PathBuf::from(r"C:\Program Files\Common Files\VST3")
+    }
     #[cfg(not(target_os = "windows"))]
-    { default_vst3_dir() }
+    {
+        default_vst3_dir()
+    }
 }
 
 fn vst3_dir() -> std::path::PathBuf {
     let settings = read_settings();
-    settings.get("vst3_path")
+    settings
+        .get("vst3_path")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(preferred_install_vst3_dir)
 }
@@ -181,24 +193,36 @@ fn default_clap_dir() -> std::path::PathBuf {
     #[cfg(target_os = "macos")]
     {
         dirs::home_dir()
-            .map(|p| p.join("Library").join("Audio").join("Plug-Ins").join("CLAP"))
+            .map(|p| {
+                p.join("Library")
+                    .join("Audio")
+                    .join("Plug-Ins")
+                    .join("CLAP")
+            })
             .unwrap_or_else(|| std::path::PathBuf::from("/Library/Audio/Plug-Ins/CLAP"))
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    { dirs::home_dir().unwrap_or_default().join(".clap") }
+    {
+        dirs::home_dir().unwrap_or_default().join(".clap")
+    }
 }
 
 /// System CLAP folder default on Windows (mirrors preferred_install_vst3_dir).
 fn preferred_install_clap_dir() -> std::path::PathBuf {
     #[cfg(target_os = "windows")]
-    { std::path::PathBuf::from(r"C:\Program Files\Common Files\CLAP") }
+    {
+        std::path::PathBuf::from(r"C:\Program Files\Common Files\CLAP")
+    }
     #[cfg(not(target_os = "windows"))]
-    { default_clap_dir() }
+    {
+        default_clap_dir()
+    }
 }
 
 fn clap_dir() -> std::path::PathBuf {
     let settings = read_settings();
-    settings.get("clap_path")
+    settings
+        .get("clap_path")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(preferred_install_clap_dir)
 }
@@ -215,6 +239,8 @@ struct StalePlugin {
 /// "Clean old versions" repair to find leftover Hardwave copies that make a
 /// DAW load a stale build.
 fn all_plugin_dirs() -> Vec<(std::path::PathBuf, &'static str, &'static str)> {
+    // Only pushed to on Windows and macOS.
+    #[allow(unused_mut)]
     let mut v: Vec<(std::path::PathBuf, &'static str, &'static str)> = vec![
         (vst3_dir(), "VST3", "configured"),
         (default_vst3_dir(), "VST3", "per-user"),
@@ -223,13 +249,29 @@ fn all_plugin_dirs() -> Vec<(std::path::PathBuf, &'static str, &'static str)> {
     ];
     #[cfg(target_os = "windows")]
     {
-        v.push((std::path::PathBuf::from(r"C:\Program Files\Common Files\VST3"), "VST3", "system"));
-        v.push((std::path::PathBuf::from(r"C:\Program Files\Common Files\CLAP"), "CLAP", "system"));
+        v.push((
+            std::path::PathBuf::from(r"C:\Program Files\Common Files\VST3"),
+            "VST3",
+            "system",
+        ));
+        v.push((
+            std::path::PathBuf::from(r"C:\Program Files\Common Files\CLAP"),
+            "CLAP",
+            "system",
+        ));
     }
     #[cfg(target_os = "macos")]
     {
-        v.push((std::path::PathBuf::from("/Library/Audio/Plug-Ins/VST3"), "VST3", "system"));
-        v.push((std::path::PathBuf::from("/Library/Audio/Plug-Ins/CLAP"), "CLAP", "system"));
+        v.push((
+            std::path::PathBuf::from("/Library/Audio/Plug-Ins/VST3"),
+            "VST3",
+            "system",
+        ));
+        v.push((
+            std::path::PathBuf::from("/Library/Audio/Plug-Ins/CLAP"),
+            "CLAP",
+            "system",
+        ));
     }
     v
 }
@@ -242,21 +284,32 @@ fn is_removable_hardwave_plugin(path: &std::path::Path) -> bool {
         Some(f) => f.to_string_lossy().to_lowercase(),
         None => return false,
     };
-    if !fname.starts_with("hardwave-") { return false; }
-    if !(fname.ends_with(".vst3") || fname.ends_with(".clap")) { return false; }
+    if !fname.starts_with("hardwave-") {
+        return false;
+    }
+    if !(fname.ends_with(".vst3") || fname.ends_with(".clap")) {
+        return false;
+    }
     // Reject symlinks / Windows junctions / reparse points. A real plug-in
     // bundle is never a link; following one would let a recursive delete escape
     // into an arbitrary target tree — especially dangerous under elevation.
     if let Ok(md) = std::fs::symlink_metadata(path) {
-        if md.file_type().is_symlink() { return false; }
+        if md.file_type().is_symlink() {
+            return false;
+        }
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::fs::MetadataExt;
             const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-            if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 { return false; }
+            if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return false;
+            }
         }
     }
-    let parent = match path.parent() { Some(p) => p, None => return false };
+    let parent = match path.parent() {
+        Some(p) => p,
+        None => return false,
+    };
     all_plugin_dirs().iter().any(|(d, _, _)| d == parent)
 }
 
@@ -265,15 +318,29 @@ fn scan_stale_plugins() -> Vec<StalePlugin> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for (dir, format, scope) in all_plugin_dirs() {
-        let rd = match std::fs::read_dir(&dir) { Ok(r) => r, Err(_) => continue };
+        let rd = match std::fs::read_dir(&dir) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
         for entry in rd.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             let lname = name.to_lowercase();
-            if !lname.starts_with("hardwave-") { continue; }
-            if !(lname.ends_with(".vst3") || lname.ends_with(".clap")) { continue; }
+            if !lname.starts_with("hardwave-") {
+                continue;
+            }
+            if !(lname.ends_with(".vst3") || lname.ends_with(".clap")) {
+                continue;
+            }
             let key = entry.path().to_string_lossy().to_string();
-            if !seen.insert(key.clone()) { continue; }
-            out.push(StalePlugin { path: key, name, format: format.to_string(), scope: scope.to_string() });
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            out.push(StalePlugin {
+                path: key,
+                name,
+                format: format.to_string(),
+                scope: scope.to_string(),
+            });
         }
     }
     out
@@ -287,7 +354,12 @@ fn scan_stale_plugins() -> Vec<StalePlugin> {
 /// copy_elevated, uninstall_plugin's rmdir).
 #[cfg(target_os = "windows")]
 fn path_has_shell_meta(p: &str) -> bool {
-    p.contains(|c: char| matches!(c, '"' | '&' | '|' | '<' | '>' | '^' | '%' | '`' | '\n' | '\r'))
+    p.contains(|c: char| {
+        matches!(
+            c,
+            '"' | '&' | '|' | '<' | '>' | '^' | '%' | '`' | '\n' | '\r'
+        )
+    })
 }
 
 /// Remove a single plug-in path with an elevation (UAC) prompt on Windows.
@@ -331,10 +403,19 @@ fn remove_stale_plugins(paths: Vec<String>) -> Result<Vec<String>, String> {
     for p in paths {
         let path = std::path::PathBuf::from(&p);
         if !is_removable_hardwave_plugin(&path) {
-            return Err(format!("Refused — not a Hardwave plug-in in a known folder: {}", p));
+            return Err(format!(
+                "Refused — not a Hardwave plug-in in a known folder: {}",
+                p
+            ));
         }
-        if !path.exists() { continue; }
-        let res = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+        if !path.exists() {
+            continue;
+        }
+        let res = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
         match res {
             Ok(()) => removed.push(p),
             Err(e) => {
@@ -356,7 +437,10 @@ fn remove_stale_plugins(paths: Vec<String>) -> Result<Vec<String>, String> {
                 {
                     if is_denied {
                         match remove_path_elevated(&path) {
-                            Ok(()) => { removed.push(p); continue; }
+                            Ok(()) => {
+                                removed.push(p);
+                                continue;
+                            }
                             Err(ee) => return Err(format!("Couldn't remove {} — {}", p, ee)),
                         }
                     }
@@ -390,7 +474,11 @@ fn append_sweep_log(action: &str, path: &str) {
         .unwrap_or(0);
     let dir = data_dir();
     let _ = std::fs::create_dir_all(&dir);
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("sweep.log")) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("sweep.log"))
+    {
         let _ = writeln!(f, "{}\t{}\t{}", secs, action, path);
     }
 }
@@ -429,15 +517,21 @@ fn sweep_other_copies(
             let candidate = dir.join(name);
             // Never touch the copies we just installed (match raw or canonical).
             let canon = candidate.canonicalize().ok();
-            if keep.contains(&candidate) || canon.as_ref().map_or(false, |c| keep.contains(c)) {
+            if keep.contains(&candidate) || canon.as_ref().is_some_and(|c| keep.contains(c)) {
                 continue;
             }
             // De-dup: the same physical file can surface via two dir aliases
             // (e.g. configured dir == default dir when unset).
             let dedup_key = canon.unwrap_or_else(|| candidate.clone());
-            if !seen.insert(dedup_key) { continue; }
-            if !candidate.exists() { continue; }
-            if !is_removable_hardwave_plugin(&candidate) { continue; }
+            if !seen.insert(dedup_key) {
+                continue;
+            }
+            if !candidate.exists() {
+                continue;
+            }
+            if !is_removable_hardwave_plugin(&candidate) {
+                continue;
+            }
             let res = if candidate.is_dir() {
                 std::fs::remove_dir_all(&candidate)
             } else {
@@ -451,16 +545,24 @@ fn sweep_other_copies(
                 }
                 Err(e) => {
                     let msg = e.to_string();
-                    let reason = if msg.contains("os error 32") || msg.contains("being used by another process") {
+                    let reason = if msg.contains("os error 32")
+                        || msg.contains("being used by another process")
+                    {
                         "in_use"
-                    } else if msg.contains("os error 5") || msg.contains("Access is denied")
-                        || msg.contains("Permission denied") || msg.contains("os error 13") {
+                    } else if msg.contains("os error 5")
+                        || msg.contains("Access is denied")
+                        || msg.contains("Permission denied")
+                        || msg.contains("os error 13")
+                    {
                         "denied"
                     } else {
                         "error"
                     };
                     append_sweep_log(&format!("blocked-{}", reason), &cand_str);
-                    blocked.push(BlockedCopy { path: cand_str, reason: reason.to_string() });
+                    blocked.push(BlockedCopy {
+                        path: cand_str,
+                        reason: reason.to_string(),
+                    });
                 }
             }
         }
@@ -512,7 +614,8 @@ fn copy_dir_all(src: &std::path::Path, dest: &std::path::Path) -> Result<(), Str
 
 fn sample_dir(product_name: &str) -> std::path::PathBuf {
     let settings = read_settings();
-    let base = settings.get("sample_path")
+    let base = settings
+        .get("sample_path")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(default_sample_dir);
     base.join(product_name)
@@ -520,13 +623,13 @@ fn sample_dir(product_name: &str) -> std::path::PathBuf {
 
 /// Extract a zip file into dest_dir, then delete the zip.
 fn extract_zip(zip_path: &std::path::Path, dest_dir: &std::path::Path) -> Result<(), String> {
-    let file = std::fs::File::open(zip_path)
-        .map_err(|e| format!("Failed to open zip: {}", e))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| format!("Failed to read zip: {}", e))?;
+    let file = std::fs::File::open(zip_path).map_err(|e| format!("Failed to open zip: {}", e))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("Failed to read zip: {}", e))?;
 
     for i in 0..archive.len() {
-        let mut entry = archive.by_index(i)
+        let mut entry = archive
+            .by_index(i)
             .map_err(|e| format!("Failed to read zip entry: {}", e))?;
 
         let name = entry.name().to_string();
@@ -558,7 +661,13 @@ fn extract_zip(zip_path: &std::path::Path, dest_dir: &std::path::Path) -> Result
                 let needs_exec = mode & 0o111 != 0
                     || name.contains("Contents/MacOS/")
                     || name.contains("/x86_64-linux/");
-                let final_mode = if needs_exec { 0o755 } else if mode != 0 { mode } else { 0o644 };
+                let final_mode = if needs_exec {
+                    0o755
+                } else if mode != 0 {
+                    mode
+                } else {
+                    0o644
+                };
                 let _ = std::fs::set_permissions(
                     &out_path,
                     std::fs::Permissions::from_mode(final_mode),
@@ -573,9 +682,12 @@ fn extract_zip(zip_path: &std::path::Path, dest_dir: &std::path::Path) -> Result
 }
 
 /// Extract a tar.gz file into dest_dir, then delete the archive.
-fn extract_tar_gz(archive_path: &std::path::Path, dest_dir: &std::path::Path) -> Result<(), String> {
-    let file = std::fs::File::open(archive_path)
-        .map_err(|e| format!("Failed to open archive: {}", e))?;
+fn extract_tar_gz(
+    archive_path: &std::path::Path,
+    dest_dir: &std::path::Path,
+) -> Result<(), String> {
+    let file =
+        std::fs::File::open(archive_path).map_err(|e| format!("Failed to open archive: {}", e))?;
     let gz = flate2::read::GzDecoder::new(file);
     let mut tar = tar::Archive::new(gz);
 
@@ -684,7 +796,10 @@ async fn download_with_resume(
             Err(e) => {
                 attempt += 1;
                 if attempt >= MAX_RETRIES {
-                    return Err(format!("Download failed after {} attempts: {}", MAX_RETRIES, e));
+                    return Err(format!(
+                        "Download failed after {} attempts: {}",
+                        MAX_RETRIES, e
+                    ));
                 }
                 let delay = Duration::from_secs(2u64.pow(attempt));
                 let _ = app.emit(
@@ -706,7 +821,8 @@ async fn download_with_resume(
         let status_code = res.status();
 
         // Determine if server supports resume
-        let (total, mut downloaded, append) = if status_code == reqwest::StatusCode::PARTIAL_CONTENT {
+        let (total, mut downloaded, append) = if status_code == reqwest::StatusCode::PARTIAL_CONTENT
+        {
             // Server accepted our Range request
             let content_range = res
                 .headers()
@@ -716,7 +832,7 @@ async fn download_with_resume(
             // Parse "bytes START-END/TOTAL"
             let total = content_range
                 .split('/')
-                .last()
+                .next_back()
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(0);
             (total, existing_bytes, true)
@@ -794,7 +910,7 @@ async fn download_with_resume(
                 return Err(format!(
                     "Download failed after {} attempts (connection lost at {}%)",
                     MAX_RETRIES,
-                    if total > 0 { (downloaded * 100 / total) as u32 } else { 0 }
+                    (downloaded * 100).checked_div(total).unwrap_or(0) as u32
                 ));
             }
             let delay = std::time::Duration::from_secs(2u64.pow(attempt));
@@ -815,20 +931,28 @@ async fn download_with_resume(
 /// succeeded, and the per-user folder is always writable, so a failure here is
 /// logged-by-omission, never fatal. Skips work when the target equals a path we
 /// already wrote.
-fn mirror_bundle_into(staging_dir: &std::path::Path, vst3_target: &std::path::Path, clap_target: &std::path::Path) {
+fn mirror_bundle_into(
+    staging_dir: &std::path::Path,
+    vst3_target: &std::path::Path,
+    clap_target: &std::path::Path,
+) {
     if std::fs::create_dir_all(vst3_target).is_ok() {
         let _ = copy_dir_all(staging_dir, vst3_target);
     }
     if let Ok(rd) = std::fs::read_dir(staging_dir) {
         for entry in rd.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if !name.to_lowercase().ends_with(".clap") { continue; }
+            if !name.to_lowercase().ends_with(".clap") {
+                continue;
+            }
             let _ = std::fs::create_dir_all(clap_target);
             let dest = clap_target.join(&name);
             let _ = if entry.path().is_dir() {
                 copy_dir_all(&entry.path(), &dest)
             } else {
-                std::fs::copy(entry.path(), &dest).map(|_| ()).map_err(|e| e.to_string())
+                std::fs::copy(entry.path(), &dest)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
             };
         }
     }
@@ -858,7 +982,8 @@ async fn install_downloaded_bundle(
 
     // Extract archive to a temp staging dir first
     let lower = filename.to_lowercase();
-    let is_archive = lower.ends_with(".zip") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz");
+    let is_archive =
+        lower.ends_with(".zip") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz");
 
     if is_archive {
         let staging_dir = std::env::temp_dir().join(format!("hw_stage_{}", file_id));
@@ -867,9 +992,9 @@ async fn install_downloaded_bundle(
             .map_err(|e| format!("Failed to create staging dir: {}", e))?;
 
         if lower.ends_with(".zip") {
-            extract_zip(&tmp_path, &staging_dir)?;
+            extract_zip(tmp_path, &staging_dir)?;
         } else {
-            extract_tar_gz(&tmp_path, &staging_dir)?;
+            extract_tar_gz(tmp_path, &staging_dir)?;
         }
 
         // Copy to the install dir. The default VST3 target on Windows is now the
@@ -935,10 +1060,18 @@ async fn install_downloaded_bundle(
 
         // Verify that files were actually copied
         let entries: Vec<_> = std::fs::read_dir(&effective_install_dir)
-            .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect())
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect()
+            })
             .unwrap_or_default();
         let staging_entries: Vec<_> = std::fs::read_dir(&staging_dir)
-            .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect())
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect()
+            })
             .unwrap_or_default();
         for expected in &staging_entries {
             if !entries.iter().any(|e| e == expected) {
@@ -960,13 +1093,17 @@ async fn install_downloaded_bundle(
             if let Ok(rd) = std::fs::read_dir(&staging_dir) {
                 for entry in rd.flatten() {
                     let name = entry.file_name().to_string_lossy().to_string();
-                    if !name.to_lowercase().ends_with(".clap") { continue; }
+                    if !name.to_lowercase().ends_with(".clap") {
+                        continue;
+                    }
                     let _ = std::fs::create_dir_all(&cdir);
                     let dest = cdir.join(&name);
                     let res = if entry.path().is_dir() {
                         copy_dir_all(&entry.path(), &dest)
                     } else {
-                        std::fs::copy(entry.path(), &dest).map(|_| ()).map_err(|e| e.to_string())
+                        std::fs::copy(entry.path(), &dest)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string())
                     };
                     #[cfg(target_os = "windows")]
                     if let Err(e) = &res {
@@ -996,7 +1133,10 @@ async fn install_downloaded_bundle(
         if matches!(category, "vst" | "vst3") {
             let bundle_files: Vec<String> = staging_entries
                 .iter()
-                .filter(|n| { let l = n.to_lowercase(); l.ends_with(".vst3") || l.ends_with(".clap") })
+                .filter(|n| {
+                    let l = n.to_lowercase();
+                    l.ends_with(".vst3") || l.ends_with(".clap")
+                })
                 .cloned()
                 .collect();
             // Protect exactly the folders this install ACTUALLY wrote the current
@@ -1009,14 +1149,19 @@ async fn install_downloaded_bundle(
             // preserve a stale build there — and on the system folder that's the
             // "FL still loads the old version" regression. So: protect-what-you-wrote.
             let standard_dirs = [
-                effective_install_dir.clone(), clap_dir(),
-                default_vst3_dir(), default_clap_dir(),
+                effective_install_dir.clone(),
+                clap_dir(),
+                default_vst3_dir(),
+                default_clap_dir(),
             ];
-            let mut keep: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+            let mut keep: std::collections::HashSet<std::path::PathBuf> =
+                std::collections::HashSet::new();
             for name in &bundle_files {
                 for dir in &standard_dirs {
                     let p = dir.join(name);
-                    if let Ok(c) = p.canonicalize() { keep.insert(c); }
+                    if let Ok(c) = p.canonicalize() {
+                        keep.insert(c);
+                    }
                     keep.insert(p);
                 }
             }
@@ -1038,7 +1183,7 @@ async fn install_downloaded_bundle(
         // Not an archive — copy single file
         std::fs::create_dir_all(&install_dir)
             .map_err(|e| format!("Failed to create install dir: {}", e))?;
-        tokio::fs::copy(&tmp_path, install_dir.join(&filename))
+        tokio::fs::copy(&tmp_path, install_dir.join(filename))
             .await
             .map_err(|e| e.to_string())?;
         let _ = tokio::fs::remove_file(&tmp_path).await;
@@ -1048,6 +1193,7 @@ async fn install_downloaded_bundle(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn download_and_install(
     file_id: String,
     url: String,
@@ -1061,7 +1207,8 @@ async fn download_and_install(
 ) -> Result<String, String> {
     let token = state.api_token.lock().unwrap().clone();
 
-    let (tmp_path, downloaded) = download_with_resume(&url, &token, &filename, &file_id, &app).await?;
+    let (tmp_path, downloaded) =
+        download_with_resume(&url, &token, &filename, &file_id, &app).await?;
 
     let total = downloaded;
 
@@ -1203,7 +1350,10 @@ fn editor_log_path(slug: &str) -> Option<std::path::PathBuf> {
 fn last_opened_from_log(slug: &str) -> Option<String> {
     let path = editor_log_path(slug)?;
     let text = std::fs::read_to_string(path).ok()?;
-    let line = text.lines().rev().find(|l| l.len() > 20 && l.starts_with("20"))?;
+    let line = text
+        .lines()
+        .rev()
+        .find(|l| l.len() > 20 && l.starts_with("20"))?;
     Some(line.split(" [").next().unwrap_or(line).trim().to_string())
 }
 
@@ -1323,7 +1473,7 @@ async fn uninstall_plugin(slug: String, category: String) -> Result<(), String> 
             let vst = vst3_dir();
             vec![
                 vst.join(format!("{}.vst3", bundle_name)),
-                vst.join(format!("{}.clap", bundle_name)),       // legacy: old builds mislocated the CLAP in the VST3 dir
+                vst.join(format!("{}.clap", bundle_name)), // legacy: old builds mislocated the CLAP in the VST3 dir
                 clap_dir().join(format!("{}.clap", bundle_name)), // real CLAP folder
             ]
         }
@@ -1421,11 +1571,17 @@ async fn open_install_folder(category: String) -> Result<(), String> {
 #[tauri::command]
 fn system_vst3_dir() -> String {
     #[cfg(target_os = "windows")]
-    { String::from(r"C:\Program Files\Common Files\VST3") }
+    {
+        String::from(r"C:\Program Files\Common Files\VST3")
+    }
     #[cfg(target_os = "macos")]
-    { String::from("/Library/Audio/Plug-Ins/VST3") }
+    {
+        String::from("/Library/Audio/Plug-Ins/VST3")
+    }
     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    { String::from("/usr/lib/vst3") }
+    {
+        String::from("/usr/lib/vst3")
+    }
 }
 
 /// Request elevation and grant the current user (OI)(CI)(M) Modify rights on
@@ -1575,7 +1731,8 @@ if ($failures.Count -gt 0) {{
 
         let out = std::process::Command::new("powershell.exe")
             .arg("-NoProfile")
-            .arg("-WindowStyle").arg("Hidden")
+            .arg("-WindowStyle")
+            .arg("Hidden")
             .arg("-Command")
             .arg(&outer)
             .output()
@@ -1592,9 +1749,17 @@ if ($failures.Count -gt 0) {{
             let transcript = std::fs::read_to_string(&log_path).unwrap_or_default();
             let outer_err = String::from_utf8_lossy(&out.stderr).to_string();
             let mut parts = Vec::new();
-            if !transcript.trim().is_empty() { parts.push(format!("TRANSCRIPT:\n{}", transcript.trim())); }
-            if !outer_err.trim().is_empty() { parts.push(format!("OUTER:\n{}", outer_err.trim())); }
-            if parts.is_empty() { "(no diagnostic output)".into() } else { parts.join("\n\n") }
+            if !transcript.trim().is_empty() {
+                parts.push(format!("TRANSCRIPT:\n{}", transcript.trim()));
+            }
+            if !outer_err.trim().is_empty() {
+                parts.push(format!("OUTER:\n{}", outer_err.trim()));
+            }
+            if parts.is_empty() {
+                "(no diagnostic output)".into()
+            } else {
+                parts.join("\n\n")
+            }
         };
 
         let exit_code = out.status.code();
@@ -1635,7 +1800,9 @@ if ($failures.Count -gt 0) {{
         }
     }
     #[cfg(not(target_os = "windows"))]
-    { Ok("not_applicable".into()) }
+    {
+        Ok("not_applicable".into())
+    }
 }
 
 /// Probe whether the current user can write to the system VST3 folder
@@ -1663,14 +1830,19 @@ fn probe_system_vst3_writable() -> Result<bool, String> {
         }
     }
     #[cfg(not(target_os = "windows"))]
-    { Ok(true) }
+    {
+        Ok(true)
+    }
 }
 
 #[tauri::command]
 fn get_install_paths() -> std::collections::HashMap<String, String> {
     let mut paths = std::collections::HashMap::new();
     paths.insert("vst3".to_string(), vst3_dir().to_string_lossy().to_string());
-    paths.insert("sample".to_string(), default_sample_dir().to_string_lossy().to_string());
+    paths.insert(
+        "sample".to_string(),
+        default_sample_dir().to_string_lossy().to_string(),
+    );
 
     // Return actual configured values (or defaults)
     let settings = read_settings();
@@ -1682,8 +1854,14 @@ fn get_install_paths() -> std::collections::HashMap<String, String> {
     }
 
     // Also include the defaults so the UI can show a "Reset" option
-    paths.insert("vst3_default".to_string(), default_vst3_dir().to_string_lossy().to_string());
-    paths.insert("sample_default".to_string(), default_sample_dir().to_string_lossy().to_string());
+    paths.insert(
+        "vst3_default".to_string(),
+        default_vst3_dir().to_string_lossy().to_string(),
+    );
+    paths.insert(
+        "sample_default".to_string(),
+        default_sample_dir().to_string_lossy().to_string(),
+    );
 
     // The OS-canonical system path. Used by the Per-user / System scope
     // toggle to point the vst3_path setting at the elevated location when
@@ -1718,7 +1896,8 @@ async fn pick_folder(app: tauri::AppHandle, title: String) -> Result<Option<Stri
         .file()
         .set_title(&title)
         .pick_folder(move |path| {
-            let _ = tx.send(path.and_then(|p| p.as_path().map(|pp| pp.to_string_lossy().to_string())));
+            let _ =
+                tx.send(path.and_then(|p| p.as_path().map(|pp| pp.to_string_lossy().to_string())));
         });
     rx.await.map_err(|e| format!("Dialog error: {}", e))
 }
@@ -1772,10 +1951,19 @@ fn fl_script_status() -> std::collections::HashMap<String, serde_json::Value> {
         Some(dir) => {
             let parent = dir.parent().unwrap_or(&dir);
             result.insert("fl_found".into(), serde_json::Value::Bool(parent.exists()));
-            result.insert("hardware_dir".into(), serde_json::json!(parent.to_string_lossy()));
+            result.insert(
+                "hardware_dir".into(),
+                serde_json::json!(parent.to_string_lossy()),
+            );
             let script_file = dir.join("device_Hardwave Collab.py");
-            result.insert("installed".into(), serde_json::Value::Bool(script_file.exists()));
-            result.insert("install_path".into(), serde_json::json!(dir.to_string_lossy()));
+            result.insert(
+                "installed".into(),
+                serde_json::Value::Bool(script_file.exists()),
+            );
+            result.insert(
+                "install_path".into(),
+                serde_json::json!(dir.to_string_lossy()),
+            );
         }
         None => {
             result.insert("fl_found".into(), serde_json::Value::Bool(false));
@@ -1852,7 +2040,8 @@ async fn upload_crash_report() -> Result<String, String> {
         return Err("No crash log found".into());
     }
 
-    let log_content = std::fs::read(&log_path).map_err(|e| format!("Failed to read crash log: {}", e))?;
+    let log_content =
+        std::fs::read(&log_path).map_err(|e| format!("Failed to read crash log: {}", e))?;
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1863,15 +2052,24 @@ async fn upload_crash_report() -> Result<String, String> {
     let client = reqwest::Client::new();
     let form = reqwest::multipart::Form::new()
         .text("category", "crash-reports")
-        .text("description", format!("Crash report from {} plugin", plugin))
-        .part("file", reqwest::multipart::Part::bytes(log_content)
-            .file_name(filename)
-            .mime_str("text/plain")
-            .unwrap());
+        .text(
+            "description",
+            format!("Crash report from {} plugin", plugin),
+        )
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(log_content)
+                .file_name(filename)
+                .mime_str("text/plain")
+                .unwrap(),
+        );
 
     let res = client
         .post("https://erp.hardwavestudios.com/api/erp/archive")
-        .header("x-api-key", "540f288f51ee8029e2d9c085c4ea0b58880dfdde8c68b33b66847829cbd5235e")
+        .header(
+            "x-api-key",
+            "540f288f51ee8029e2d9c085c4ea0b58880dfdde8c68b33b66847829cbd5235e",
+        )
         .header("x-server-origin", "hardwave-suite")
         .multipart(form)
         .send()
@@ -1901,11 +2099,12 @@ fn dismiss_crash_report() {
 // ── Collab Commands ──
 
 #[tauri::command]
-async fn collab_create(
-    state: State<'_, AppState>,
-    app: tauri::AppHandle,
-) -> Result<(), String> {
-    let token = state.api_token.lock().unwrap().clone()
+async fn collab_create(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
+    let token = state
+        .api_token
+        .lock()
+        .unwrap()
+        .clone()
         .ok_or("Not authenticated")?;
     let collab = state.collab.clone();
     let br = state.bridge.clone();
@@ -1926,7 +2125,11 @@ async fn collab_join(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let token = state.api_token.lock().unwrap().clone()
+    let token = state
+        .api_token
+        .lock()
+        .unwrap()
+        .clone()
         .ok_or("Not authenticated")?;
     let collab = state.collab.clone();
     let br = state.bridge.clone();
@@ -1952,7 +2155,10 @@ async fn collab_send_chat(text: String, state: State<'_, AppState>) -> Result<()
 }
 
 #[tauri::command]
-async fn collab_send_presence(active_window: String, state: State<'_, AppState>) -> Result<(), String> {
+async fn collab_send_presence(
+    active_window: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     collabs::send_presence(&state.collab, &active_window).await
 }
 
@@ -1964,9 +2170,7 @@ async fn bridge_status(state: State<'_, AppState>) -> Result<serde_json::Value, 
     let fl_state = br.get_last_state().await;
 
     // Extract transport info from FL state if available
-    let transport = fl_state
-        .as_ref()
-        .and_then(|s| s.get("transport").cloned());
+    let transport = fl_state.as_ref().and_then(|s| s.get("transport").cloned());
 
     Ok(serde_json::json!({
         "fl_connected": fl_connected,

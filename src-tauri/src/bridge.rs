@@ -173,7 +173,8 @@ pub async fn start_bridge(
 
                             let _ = send_response(&mut stream, 200, r#"{"ok":true}"#).await;
                         } else {
-                            let _ = send_response(&mut stream, 400, r#"{"error":"invalid json"}"#).await;
+                            let _ = send_response(&mut stream, 400, r#"{"error":"invalid json"}"#)
+                                .await;
                         }
                     }
 
@@ -188,7 +189,8 @@ pub async fn start_bridge(
                         let body = serde_json::json!({
                             "bridge": "ok",
                             "relay_connected": connected,
-                        }).to_string();
+                        })
+                        .to_string();
                         let _ = send_response(&mut stream, 200, &body).await;
                     }
 

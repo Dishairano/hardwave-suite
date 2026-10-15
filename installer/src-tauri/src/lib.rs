@@ -14,6 +14,7 @@ use tauri::{AppHandle, State};
 
 mod acl;
 mod install;
+mod mode;
 #[cfg(windows)]
 mod shortcut;
 #[cfg(windows)]
@@ -72,8 +73,15 @@ async fn fetch_latest_version() -> Result<LatestVersion, String> {
                 if let Some(v) = body.get("version").and_then(|v| v.as_str()) {
                     return Ok(LatestVersion {
                         version: v.trim_start_matches('v').to_string(),
-                        notes: body.get("notes").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                        pub_date: body.get("pub_date").and_then(|v| v.as_str()).map(str::to_string),
+                        notes: body
+                            .get("notes")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        pub_date: body
+                            .get("pub_date")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
                     });
                 }
             }
@@ -97,7 +105,10 @@ async fn fetch_latest_version() -> Result<LatestVersion, String> {
         .and_then(|v| v.as_str())
         .ok_or("GitHub release missing tag_name")?;
     let body = gh.get("body").and_then(|v| v.as_str()).unwrap_or("");
-    let pub_date = gh.get("published_at").and_then(|v| v.as_str()).map(str::to_string);
+    let pub_date = gh
+        .get("published_at")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
 
     Ok(LatestVersion {
         version: tag.trim_start_matches('v').to_string(),
@@ -109,9 +120,7 @@ async fn fetch_latest_version() -> Result<LatestVersion, String> {
 /// Returns the default per-user install directory.
 #[tauri::command]
 fn default_install_dir() -> String {
-    install::default_install_dir()
-        .to_string_lossy()
-        .to_string()
+    install::default_install_dir().to_string_lossy().to_string()
 }
 
 /// Starts the full install pipeline. Emits `install://progress` events.
@@ -176,17 +185,23 @@ fn quit(app: AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Handle --uninstall flag: launch the uninstall path and exit.
-    let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "--uninstall") {
+    // Uninstall mode (an uninstall argument, or this exe is the copied
+    // "Hardwave Suite Uninstaller.exe"): run the uninstall path and exit
+    // without ever starting the install window.
+    let args: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let exe = std::env::current_exe().ok();
+    if let mode::Mode::Uninstall { quiet } = mode::decide(&args, exe.as_deref()) {
         #[cfg(windows)]
+        std::process::exit(uninstall::run_interactive(quiet));
+        #[cfg(not(windows))]
         {
-            if let Err(e) = uninstall::uninstall() {
-                eprintln!("Uninstall failed: {e}");
-                std::process::exit(1);
-            }
+            let _ = quiet;
+            eprintln!("Uninstall is only supported on Windows.");
+            std::process::exit(1);
         }
-        return;
     }
 
     tauri::Builder::default()

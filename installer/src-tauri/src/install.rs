@@ -26,9 +26,7 @@ pub fn default_install_dir() -> PathBuf {
     }
     #[cfg(target_os = "macos")]
     {
-        dirs::home_dir()
-            .unwrap_or_default()
-            .join("Applications")
+        dirs::home_dir().unwrap_or_default().join("Applications")
     }
     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
     {
@@ -301,16 +299,14 @@ fn extract_zip(zip_path: &Path, dest: &Path, app: &AppHandle) -> Result<(), Stri
         };
 
         if entry.is_dir() {
-            std::fs::create_dir_all(&outpath)
-                .map_err(|e| format!("mkdir failed: {e}"))?;
+            std::fs::create_dir_all(&outpath).map_err(|e| format!("mkdir failed: {e}"))?;
         } else {
             if let Some(parent) = outpath.parent() {
                 std::fs::create_dir_all(parent).ok();
             }
             let mut outfile =
                 std::fs::File::create(&outpath).map_err(|e| format!("create failed: {e}"))?;
-            std::io::copy(&mut entry, &mut outfile)
-                .map_err(|e| format!("copy failed: {e}"))?;
+            std::io::copy(&mut entry, &mut outfile).map_err(|e| format!("copy failed: {e}"))?;
         }
 
         #[cfg(unix)]
