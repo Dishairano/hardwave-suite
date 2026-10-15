@@ -28,3 +28,5 @@ dirs = "5"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
 mslnk = "0.1"
+# Native message boxes for uninstall mode (already in the tree via tauri-plugin-dialog).
+rfd = { version = "0.16", default-features = false }

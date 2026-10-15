@@ -29,8 +29,7 @@ fn create_lnk(target: &Path, lnk_path: &Path) -> Result<(), String> {
         std::fs::create_dir_all(parent).map_err(|e| format!("Cannot create {parent:?}: {e}"))?;
     }
 
-    let mut sl =
-        ShellLink::new(target_str).map_err(|e| format!("ShellLink create failed: {e}"))?;
+    let mut sl = ShellLink::new(target_str).map_err(|e| format!("ShellLink create failed: {e}"))?;
     sl.set_name(Some("Hardwave Suite".to_string()));
     if let Some(work_dir) = target.parent().and_then(|p| p.to_str()) {
         sl.set_working_dir(Some(work_dir.to_string()));

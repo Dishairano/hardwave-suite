@@ -17,26 +17,59 @@ const RELAY_URL_DEV: &str = "ws://127.0.0.1:9910/ws";
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientMsg {
     CreateRoom,
-    JoinRoom { code: String },
+    JoinRoom {
+        code: String,
+    },
     LeaveRoom,
-    Chat { text: String },
-    Presence { active_window: String, cursor: serde_json::Value },
+    Chat {
+        text: String,
+    },
+    Presence {
+        active_window: String,
+        cursor: serde_json::Value,
+    },
 }
 
 /// Events received from relay, forwarded to React via Tauri events
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CollabEvent {
-    RoomCreated { code: String },
-    RoomJoined { code: String, participants: Vec<serde_json::Value> },
-    ParticipantJoined { user: serde_json::Value },
-    ParticipantLeft { user_id: String },
-    Chat { from: String, from_name: String, text: String, timestamp: u64 },
-    StateDelta { from: String, domain: String, ops: Vec<serde_json::Value> },
-    Presence { from: String, active_window: String, cursor: serde_json::Value },
+    RoomCreated {
+        code: String,
+    },
+    RoomJoined {
+        code: String,
+        participants: Vec<serde_json::Value>,
+    },
+    ParticipantJoined {
+        user: serde_json::Value,
+    },
+    ParticipantLeft {
+        user_id: String,
+    },
+    Chat {
+        from: String,
+        from_name: String,
+        text: String,
+        timestamp: u64,
+    },
+    StateDelta {
+        from: String,
+        domain: String,
+        ops: Vec<serde_json::Value>,
+    },
+    Presence {
+        from: String,
+        active_window: String,
+        cursor: serde_json::Value,
+    },
     Connected,
-    Disconnected { reason: String },
-    Error { message: String },
+    Disconnected {
+        reason: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 pub struct CollabState {
@@ -60,7 +93,9 @@ impl CollabState {
     }
 
     /// Get a reference to the send channel (for the bridge to forward FL state).
-    pub async fn tx_ref(&self) -> tokio::sync::MutexGuard<'_, Option<mpsc::UnboundedSender<String>>> {
+    pub async fn tx_ref(
+        &self,
+    ) -> tokio::sync::MutexGuard<'_, Option<mpsc::UnboundedSender<String>>> {
         self.tx.lock().await
     }
 }
@@ -103,7 +138,7 @@ pub async fn connect(
         // Write loop: forward outgoing messages to WebSocket
         let write_task = tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
-                if write.send(Message::Text(msg.into())).await.is_err() {
+                if write.send(Message::Text(msg)).await.is_err() {
                     break;
                 }
             }
@@ -176,17 +211,30 @@ pub async fn create_room(state: &CollabState) -> Result<(), String> {
 
 /// Join a room by code.
 pub async fn join_room(state: &CollabState, code: &str) -> Result<(), String> {
-    send(state, &ClientMsg::JoinRoom { code: code.to_uppercase() }).await
+    send(
+        state,
+        &ClientMsg::JoinRoom {
+            code: code.to_uppercase(),
+        },
+    )
+    .await
 }
 
 /// Leave the current room.
+#[allow(dead_code)]
 pub async fn leave_room(state: &CollabState) -> Result<(), String> {
     send(state, &ClientMsg::LeaveRoom).await
 }
 
 /// Send a chat message.
 pub async fn send_chat(state: &CollabState, text: &str) -> Result<(), String> {
-    send(state, &ClientMsg::Chat { text: text.to_string() }).await
+    send(
+        state,
+        &ClientMsg::Chat {
+            text: text.to_string(),
+        },
+    )
+    .await
 }
 
 /// Send presence update.

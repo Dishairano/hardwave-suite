@@ -11,10 +11,16 @@ pub async fn login(email: &str, password: &str) -> Result<AuthResponse, String> 
         .await
         .map_err(|e| format!("Login request failed: {}", e))?;
 
-    let body = res.text().await.map_err(|e| format!("Failed to read login response: {}", e))?;
+    let body = res
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read login response: {}", e))?;
 
-    serde_json::from_str::<AuthResponse>(&body)
-        .map_err(|e| format!("Login parse error: {} | body: {}", e, &body[..body.len().min(500)]))
+    // Never put the response body in the error: a login response can carry the auth token, and the
+    // error text ends up in logs and on screen. The length is enough to tell an empty reply from HTML.
+    serde_json::from_str::<AuthResponse>(&body).map_err(|e| {
+        format!("Login parse error: {} (response of {} bytes)", e, body.len())
+    })
 }
 
 pub async fn logout(token: &str) -> Result<(), String> {
@@ -47,10 +53,14 @@ pub async fn get_downloads(token: &str) -> Result<Vec<Product>, String> {
         .await
         .map_err(|e| format!("Downloads request failed: {}", e))?;
 
-    let body = res.text().await.map_err(|e| format!("Failed to read downloads response: {}", e))?;
+    let body = res
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read downloads response: {}", e))?;
 
-    let data = serde_json::from_str::<DownloadsResponse>(&body)
-        .map_err(|e| format!("Downloads parse error: {} | body: {}", e, &body[..body.len().min(500)]))?;
+    let data = serde_json::from_str::<DownloadsResponse>(&body).map_err(|e| {
+        format!("Downloads parse error: {} (response of {} bytes)", e, body.len())
+    })?;
 
     if !data.success {
         return Err(data.error.unwrap_or("Failed to load downloads".into()));

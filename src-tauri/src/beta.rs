@@ -91,7 +91,11 @@ struct BetaPluginRaw {
     expires_at: String,
     #[serde(rename = "hours_until_expiry", alias = "hoursUntilExpiry", default)]
     hours_until_expiry: f64,
-    #[serde(rename = "hours_until_soft_warn", alias = "hoursUntilSoftWarn", default)]
+    #[serde(
+        rename = "hours_until_soft_warn",
+        alias = "hoursUntilSoftWarn",
+        default
+    )]
     hours_until_soft_warn: f64,
     #[serde(rename = "artefact_url", alias = "artefactUrl", default)]
     artefact_url: String,
@@ -160,8 +164,8 @@ fn write_config(cfg: &SuiteConfig) -> Result<(), String> {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create config dir: {}", e))?;
     }
-    let body = toml::to_string_pretty(cfg)
-        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    let body =
+        toml::to_string_pretty(cfg).map_err(|e| format!("Failed to serialize config: {}", e))?;
     std::fs::write(&path, body).map_err(|e| format!("Failed to write config: {}", e))
 }
 
@@ -173,7 +177,10 @@ pub fn read_update_channel() -> String {
 
 pub fn write_update_channel(channel: &str) -> Result<(), String> {
     if channel != "stable" && channel != "beta" {
-        return Err(format!("Invalid channel '{}': must be 'stable' or 'beta'", channel));
+        return Err(format!(
+            "Invalid channel '{}': must be 'stable' or 'beta'",
+            channel
+        ));
     }
     let mut cfg = read_config();
     cfg.update_channel = Some(channel.to_string());
@@ -213,8 +220,7 @@ fn read_installed_betas() -> Vec<InstalledBetaRecord> {
 fn write_installed_betas(records: &[InstalledBetaRecord]) -> Result<(), String> {
     let path = installed_betas_path();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create dir: {}", e))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create dir: {}", e))?;
     }
     let body = serde_json::to_string_pretty(records)
         .map_err(|e| format!("Failed to serialize installed-betas: {}", e))?;
@@ -245,11 +251,7 @@ pub async fn fetch_subscription(token: &str) -> Result<SubscriptionInfo, String>
         .map_err(|e| format!("Failed to read subscription response: {}", e))?;
 
     let raw: SubscriptionRaw = serde_json::from_str(&body).map_err(|e| {
-        format!(
-            "Subscription parse error: {} | body: {}",
-            e,
-            &body[..body.len().min(500)]
-        )
+        format!("Subscription parse error: {} (response of {} bytes)", e, body.len())
     })?;
 
     if !raw.success && raw.error.is_some() {
@@ -286,18 +288,18 @@ pub async fn fetch_beta_manifest(token: &str) -> Result<Vec<BetaPlugin>, String>
         .map_err(|e| format!("Failed to read beta manifest response: {}", e))?;
 
     let raw: ManifestRaw = serde_json::from_str(&body).map_err(|e| {
-        format!(
-            "Beta manifest parse error: {} | body: {}",
-            e,
-            &body[..body.len().min(500)]
-        )
+        format!("Beta manifest parse error: {} (response of {} bytes)", e, body.len())
     })?;
 
     Ok(raw
         .plugins
         .into_iter()
         .map(|p| {
-            let legacy = (p.artefact_url.as_str(), p.artefact_sha256.as_str(), p.artefact_size);
+            let legacy = (
+                p.artefact_url.as_str(),
+                p.artefact_sha256.as_str(),
+                p.artefact_size,
+            );
             let picked = pick_artefact(&p.artefacts, legacy, std::env::consts::OS);
             let platforms = platforms_of(&p.artefacts, &p.artefact_url);
             let available_here = picked.is_some();
@@ -328,7 +330,8 @@ fn artefact_filename(url: &str) -> Option<String> {
     let path = url.split(['?', '#']).next().unwrap_or(url);
     let name = path.rsplit('/').next().unwrap_or("");
     let lower = name.to_lowercase();
-    let is_archive = lower.ends_with(".zip") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz");
+    let is_archive =
+        lower.ends_with(".zip") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz");
     // The name becomes part of a temp path and decides how it is unpacked.
     if !is_archive || name.contains("..") || name.contains('\\') {
         return None;
@@ -373,10 +376,13 @@ fn pick_artefact(
     os: &str,
 ) -> Option<(String, String, i64)> {
     if !artefacts.is_empty() {
-        return artefacts
-            .iter()
-            .find(|a| a.platform == os)
-            .map(|a| (a.artefact_url.clone(), a.artefact_sha256.clone(), a.artefact_size));
+        return artefacts.iter().find(|a| a.platform == os).map(|a| {
+            (
+                a.artefact_url.clone(),
+                a.artefact_sha256.clone(),
+                a.artefact_size,
+            )
+        });
     }
     let (url, sha256, size) = legacy;
     let name = artefact_filename(url)?;
@@ -398,7 +404,10 @@ fn platforms_of(artefacts: &[BetaArtefactRaw], legacy_url: &str) -> Vec<String> 
 }
 
 fn valid_slug(slug: &str) -> bool {
-    !slug.is_empty() && slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    !slug.is_empty()
+        && slug
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 /// Download a beta artefact and verify its sha256. Returns the temp file and the
@@ -557,7 +566,9 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
             // folder: for a beta in the plug-in folders it is the shared VST3
             // folder itself, and renaming it would hide every plug-in in it.
             let install_dir = PathBuf::from(&rec.install_dir);
-            if let Some(target) = legacy_expiry_target(&install_dir, &rec.slug, &beta_plugins_root()) {
+            if let Some(target) =
+                legacy_expiry_target(&install_dir, &rec.slug, &beta_plugins_root())
+            {
                 if install_dir.exists() {
                     let _ = std::fs::remove_dir_all(&target);
                     let _ = std::fs::rename(&install_dir, &target);
@@ -596,7 +607,11 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
 /// `plugins/beta/<slug>` folder, matched exactly.
 fn legacy_expiry_target(install_dir: &Path, slug: &str, legacy_root: &Path) -> Option<PathBuf> {
     use std::path::Component;
-    if !valid_slug(slug) || install_dir.components().any(|c| matches!(c, Component::ParentDir)) {
+    if !valid_slug(slug)
+        || install_dir
+            .components()
+            .any(|c| matches!(c, Component::ParentDir))
+    {
         return None;
     }
     if install_dir != legacy_root.join(slug) {
@@ -628,10 +643,20 @@ mod tests {
             Some(root().join("wettboi.expired"))
         );
         assert_eq!(legacy_expiry_target(&root(), "wettboi", &root()), None);
-        assert_eq!(legacy_expiry_target(&root().join("loudlab"), "wettboi", &root()), None);
-        assert_eq!(legacy_expiry_target(&root().join("wettboi"), "../wettboi", &root()), None);
         assert_eq!(
-            legacy_expiry_target(&root().join("x").join("..").join("wettboi"), "wettboi", &root()),
+            legacy_expiry_target(&root().join("loudlab"), "wettboi", &root()),
+            None
+        );
+        assert_eq!(
+            legacy_expiry_target(&root().join("wettboi"), "../wettboi", &root()),
+            None
+        );
+        assert_eq!(
+            legacy_expiry_target(
+                &root().join("x").join("..").join("wettboi"),
+                "wettboi",
+                &root()
+            ),
             None
         );
     }
@@ -639,7 +664,9 @@ mod tests {
     #[test]
     fn artefact_filename_accepts_archives_only() {
         assert_eq!(
-            artefact_filename("https://github.com/o/r/releases/download/v0.4.0-rc1/WettBoi-windows.zip"),
+            artefact_filename(
+                "https://github.com/o/r/releases/download/v0.4.0-rc1/WettBoi-windows.zip"
+            ),
             Some("WettBoi-windows.zip".into())
         );
         assert_eq!(
@@ -649,7 +676,10 @@ mod tests {
         assert_eq!(artefact_filename("https://cdn.example/b/plug.exe"), None);
         assert_eq!(artefact_filename("https://cdn.example/b/"), None);
         assert_eq!(artefact_filename("https://cdn.example/b/..%2f.zip"), None);
-        assert_eq!(artefact_filename("https://cdn.example/b/a\\..\\x.zip"), None);
+        assert_eq!(
+            artefact_filename("https://cdn.example/b/a\\..\\x.zip"),
+            None
+        );
     }
 
     #[test]
@@ -660,7 +690,10 @@ mod tests {
         let mac = "hardwave-wettboi-macos-universal.zip";
         assert_eq!(built_for_other_os(mac, "macos"), None);
         assert_eq!(built_for_other_os(mac, "windows"), Some("macOS"));
-        assert_eq!(built_for_other_os("hardwave-wettboi-linux-x64.zip", "windows"), Some("Linux"));
+        assert_eq!(
+            built_for_other_os("hardwave-wettboi-linux-x64.zip", "windows"),
+            Some("Linux")
+        );
         assert_eq!(built_for_other_os("hardwave-wettboi.zip", "macos"), None);
     }
 
@@ -682,7 +715,10 @@ mod tests {
         let legacy = ("https://x/hardwave-wettboi-windows-x64.zip", "b", 5);
         let mac = pick_artefact(&list, legacy, "macos").expect("mac build");
         assert!(mac.0.ends_with("macos-universal.zip"));
-        assert!(pick_artefact(&list, legacy, "windows").unwrap().0.ends_with("windows-x64.zip"));
+        assert!(pick_artefact(&list, legacy, "windows")
+            .unwrap()
+            .0
+            .ends_with("windows-x64.zip"));
         // Per-platform list without Linux: no fallback to the legacy Windows zip.
         assert_eq!(pick_artefact(&list, legacy, "linux"), None);
         assert_eq!(platforms_of(&list, legacy.0), vec!["windows", "macos"]);
