@@ -314,14 +314,16 @@ fn delete_key(hkcu: &RegKey, path: &str) -> Result<(), String> {
 }
 
 /// Schedules the install folder for deletion after the current process exits.
-/// Uses `cmd /c timeout 2 && rmdir /s /q "<dir>"` detached.
+/// Waits about three seconds with `ping`, then runs `rmdir /s /q "<dir>"`, in a detached cmd.
+/// Not `timeout`: without a console it exits at once ("Input redirection is not supported"),
+/// so the rmdir ran while this uninstaller was still running and the folder stayed.
 fn schedule_delayed_cleanup(dir: &Path) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
     const DETACHED_PROCESS: u32 = 0x00000008;
 
     let dir_str = dir.to_string_lossy().to_string();
-    let cmd = format!("timeout /t 2 /nobreak > nul & rmdir /s /q \"{}\"", dir_str);
+    let cmd = format!("ping -n 4 127.0.0.1 > nul & rmdir /s /q \"{}\"", dir_str);
     let _ = std::process::Command::new("cmd.exe")
         .args(["/C", &cmd])
         .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
