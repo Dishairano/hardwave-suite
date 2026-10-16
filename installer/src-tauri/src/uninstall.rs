@@ -4,14 +4,22 @@
 //!   HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\HardwaveSuite
 //!   with a DisplayName, Publisher, UninstallString, and icon.
 //!
-//! - `run_interactive`: Uninstall mode. Confirms with a native dialog, runs
-//!   `uninstall`, and shows the result (both dialogs skipped with --quiet).
+//! - `start_uninstall`: Uninstall mode with the window. Runs the steps the
+//!   user confirmed on the first screen (`removal::plan`) and reports each one
+//!   to the window as `uninstall://progress`.
 //!
-//! - `uninstall`: Reads the install directory out of the registry, closes a
-//!   running Suite, removes shortcuts, deletes the Suite files, and clears
-//!   the registry entries.
+//! - `run_quiet`: `--uninstall --quiet`. Removes the app (never the plug-ins)
+//!   without a window, for scripts.
+//!
+//! The steps read the install directory out of the registry, close a running
+//! Suite, remove the recorded plug-ins when asked, delete the Suite files and
+//! shortcuts, and clear the registry entries.
 
+use crate::removal::{self, Failure, Step};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock, PoisonError};
+use tauri::{AppHandle, Emitter, Manager};
 use winreg::enums::*;
 use winreg::RegKey;
 
@@ -19,9 +27,6 @@ const UNINSTALL_KEY_PATH: &str =
     r"Software\Microsoft\Windows\CurrentVersion\Uninstall\HardwaveSuite";
 const INSTALL_KEY_PATH: &str = r"Software\Hardwave Studios\Hardwave Suite";
 const UNINSTALLER_EXE_NAME: &str = "Hardwave Suite Uninstaller.exe";
-const DIALOG_TITLE: &str = "Uninstall Hardwave Suite";
-/// Exit code Windows uses for "the user cancelled" (ERROR_INSTALL_USEREXIT).
-const EXIT_CANCELLED: i32 = 1602;
 
 /// Writes the uninstall registry entry so Suite appears in Add/Remove Programs.
 /// Also copies the running installer into the install directory as
@@ -84,144 +89,223 @@ pub fn register_uninstaller(install_dir: &Path, suite_exe: &Path) -> Result<(), 
     Ok(())
 }
 
-/// Uninstall mode entry point. Asks first, uninstalls, then reports the
-/// result, all with native message boxes (no Tauri window). `quiet` skips
-/// both dialogs. Returns the process exit code.
-pub fn run_interactive(quiet: bool) -> i32 {
-    if !quiet && !confirm_removal() {
-        return EXIT_CANCELLED;
-    }
+/// The uninstall window's state (managed only in uninstall mode on Windows).
+#[derive(Default)]
+pub struct UninstallState {
+    /// Read from the registry once, so "Try again" after a run that stopped
+    /// half-way still knows the folder.
+    install_dir: OnceLock<Option<PathBuf>>,
+    /// Set by a finished uninstall; removed once this process has exited.
+    cleanup_dir: Mutex<Option<PathBuf>>,
+}
 
-    match uninstall() {
-        Ok(cleanup_dir) => {
-            if !quiet {
-                show_message(rfd::MessageLevel::Info, "Hardwave Suite has been removed.");
-            }
-            // The folder still holds this running exe, so it is removed by a
-            // detached cleanup once this process has exited.
-            if let Some(dir) = cleanup_dir {
+/// What the window hears before each step and when all are done.
+#[derive(Clone, Serialize)]
+struct Progress<'a> {
+    steps: &'a [Step],
+    done: usize,
+}
+
+/// The recorded plug-ins that are on this computer, by name, for the option on
+/// the first screen. Reads only; nothing is removed before "Remove".
+#[tauri::command]
+pub fn uninstall_overview() -> Vec<String> {
+    let record = suite_data_dir()
+        .and_then(|d| removal::read_suite_file(&d.join("installed.json")).ok())
+        .flatten();
+    let Some(record) = record else {
+        return Vec::new();
+    };
+    removal::recorded_plugins_on_disk(&record, &plugin_folders())
+        .into_iter()
+        .map(|(slug, _)| removal::display_name(&slug))
+        .collect()
+}
+
+/// Runs the uninstall the user confirmed with "Remove". Emits
+/// `uninstall://progress` before each step and when all are done.
+#[tauri::command]
+pub async fn start_uninstall(app: AppHandle, remove_plugins: bool) -> Result<(), Failure> {
+    tauri::async_runtime::spawn_blocking(move || run_with_window(&app, remove_plugins))
+        .await
+        .unwrap_or_else(|e| {
+            Err(Failure {
+                step: None,
+                reason: format!("The uninstaller stopped unexpectedly: {e}"),
+            })
+        })
+}
+
+fn run_with_window(app: &AppHandle, remove_plugins: bool) -> Result<(), Failure> {
+    let state = app.state::<UninstallState>();
+    let install_dir = state
+        .install_dir
+        .get_or_init(install_dir_on_record)
+        .clone()
+        .ok_or_else(no_record)?;
+    let steps = removal::plan(remove_plugins);
+    removal::run_plan(
+        &steps,
+        |step| run_step(step, &install_dir),
+        |done| {
+            let _ = app.emit(
+                "uninstall://progress",
+                Progress {
+                    steps: &steps,
+                    done,
+                },
+            );
+        },
+    )?;
+    // The folder still holds this running exe, so it goes once the window
+    // has closed and this process has exited.
+    if install_dir.is_dir() {
+        *state
+            .cleanup_dir
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(install_dir);
+    }
+    Ok(())
+}
+
+/// Called when the window app exits: starts the removal of the install folder
+/// a finished uninstall left behind (it held this running exe).
+pub fn cleanup_after_exit(app: &AppHandle) {
+    let Some(state) = app.try_state::<UninstallState>() else {
+        return;
+    };
+    let dir = state
+        .cleanup_dir
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+    if let Some(dir) = dir {
+        schedule_delayed_cleanup(&dir);
+    }
+}
+
+/// `--uninstall --quiet`: removes the app, never the plug-ins, without a
+/// window. Returns the process exit code.
+pub fn run_quiet() -> i32 {
+    let result = install_dir_on_record()
+        .ok_or_else(no_record)
+        .and_then(|dir| {
+            removal::run_plan(&removal::plan(false), |step| run_step(step, &dir), |_| {})?;
+            Ok(dir)
+        });
+    match result {
+        Ok(dir) => {
+            // The folder may still hold this running exe, so it is removed by
+            // a detached cleanup once this process has exited.
+            if dir.is_dir() {
                 schedule_delayed_cleanup(&dir);
             }
             0
         }
-        Err(e) => {
-            if quiet {
-                eprintln!("Uninstall failed: {e}");
-            } else {
-                show_message(
-                    rfd::MessageLevel::Error,
-                    &format!("Hardwave Suite could not be removed.\n\n{e}"),
-                );
-            }
+        Err(failure) => {
+            eprintln!("Uninstall failed: {}", failure.reason);
             1
         }
     }
 }
 
-fn confirm_removal() -> bool {
-    let answer = rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Warning)
-        .set_title(DIALOG_TITLE)
-        .set_description(
-            "Remove Hardwave Suite from this computer? \
-             Your plug-ins stay installed in your DAW folders.",
-        )
-        .set_buttons(rfd::MessageButtons::OkCancelCustom(
-            "Remove".to_string(),
-            "Cancel".to_string(),
-        ))
-        .show();
-    match answer {
-        rfd::MessageDialogResult::Custom(label) => label == "Remove",
-        rfd::MessageDialogResult::Ok | rfd::MessageDialogResult::Yes => true,
-        _ => false,
+/// Without a recorded install folder nothing is removed, not even the shortcuts.
+fn no_record() -> Failure {
+    Failure {
+        step: None,
+        reason: "Windows has no record of where Hardwave Suite is installed for this user, \
+                 so there is nothing to remove."
+            .to_string(),
     }
 }
 
-fn show_message(level: rfd::MessageLevel, text: &str) {
-    rfd::MessageDialog::new()
-        .set_level(level)
-        .set_title(DIALOG_TITLE)
-        .set_description(text)
-        .set_buttons(rfd::MessageButtons::Ok)
-        .show();
-}
-
-/// Reads the install dir from the registry, closes a running Suite, removes
-/// shortcuts, the install folder's contents and both registry keys.
-/// Installed plug-ins and settings outside the install folder are not touched.
-///
-/// On success returns the install folder, which still has to be removed
-/// after this process exits (it may contain the running uninstaller).
-pub fn uninstall() -> Result<Option<PathBuf>, String> {
+/// The install folder Windows has on record for this user, if any.
+fn install_dir_on_record() -> Option<PathBuf> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-
-    let install_dir = read_string(&hkcu, UNINSTALL_KEY_PATH, "InstallLocation")
+    read_string(&hkcu, UNINSTALL_KEY_PATH, "InstallLocation")
         .or_else(|| read_string(&hkcu, INSTALL_KEY_PATH, "InstallLocation"))
         .filter(|s| !s.trim().is_empty())
-        .map(PathBuf::from);
+        .map(PathBuf::from)
+}
 
-    let Some(dir) = install_dir else {
-        crate::shortcut::remove_shortcuts();
-        return Err(
-            "Windows has no record of where Hardwave Suite is installed for this user, \
-             so there is nothing to remove."
-                .to_string(),
-        );
-    };
+/// The Suite's own data folder, with its record of installed plug-ins and its
+/// settings. It stays: the plug-ins and a later install still use it.
+fn suite_data_dir() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|d| d.join("Hardwave Suite"))
+}
 
-    // 1. Close a running Suite so its files are not locked.
-    if dir.is_dir() {
-        close_processes_in(&dir);
+/// The folders the Suite installs plug-ins into, with the ones chosen in its settings.
+fn plugin_folders() -> Vec<PathBuf> {
+    let settings = suite_data_dir()
+        .and_then(|d| removal::read_suite_file(&d.join("settings.json")).ok())
+        .flatten();
+    removal::plugin_folders(settings.as_deref(), dirs::data_local_dir().as_deref())
+}
+
+/// Carries out one step. Every step can run again after a failed run.
+fn run_step(step: Step, install_dir: &Path) -> Result<(), String> {
+    match step {
+        Step::CloseApp if install_dir.is_dir() => close_processes_in(install_dir),
+        Step::RemovePlugins => {
+            let record = suite_data_dir()
+                .ok_or("Cannot find the Suite's data folder, so no plug-in was removed.")?
+                .join("installed.json");
+            removal::remove_recorded_plugins(&record, &plugin_folders()).map(|_| ())
+        }
+        // Everything except the running uninstaller goes now, so a locked
+        // file is reported instead of silently left behind.
+        Step::RemoveInstallFolder if install_dir.is_dir() => {
+            check_safe_to_delete(install_dir)?;
+            let self_exe = std::env::current_exe().ok();
+            remove_folder_contents(install_dir, self_exe.as_deref())
+        }
+        // The folder is gone already: nothing to close or remove in it.
+        Step::CloseApp | Step::RemoveInstallFolder => Ok(()),
+        Step::RemoveShortcuts => {
+            crate::shortcut::remove_shortcuts();
+            Ok(())
+        }
+        Step::RemoveRegistryKeys => {
+            let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+            delete_key(&hkcu, UNINSTALL_KEY_PATH)?;
+            delete_key(&hkcu, INSTALL_KEY_PATH)
+        }
     }
-
-    // 2. Shortcuts.
-    crate::shortcut::remove_shortcuts();
-
-    // 3. Install folder. Everything except the running uninstaller goes now,
-    //    so a locked file is reported instead of silently left behind.
-    let mut cleanup_dir = None;
-    if dir.is_dir() {
-        check_safe_to_delete(&dir)?;
-        let self_exe = std::env::current_exe().ok();
-        remove_folder_contents(&dir, self_exe.as_deref())?;
-        cleanup_dir = Some(dir);
-    }
-
-    // 4. Registry entries.
-    delete_key(&hkcu, UNINSTALL_KEY_PATH)?;
-    delete_key(&hkcu, INSTALL_KEY_PATH)?;
-
-    Ok(cleanup_dir)
 }
 
 /// Closes every process whose executable lives in `dir` (the Suite app),
 /// except this uninstaller. Asks the windows to close first, then ends
-/// whatever is still running after a few seconds.
-fn close_processes_in(dir: &Path) {
+/// whatever is still running after a few seconds. Fails when something from
+/// the folder is still running after that.
+fn close_processes_in(dir: &Path) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
+    /// The script's exit code when a process from the folder is still running.
+    const STILL_RUNNING: i32 = 3;
 
     // Paths go in through environment variables, so no quoting of the path
     // into the script is needed.
     const SCRIPT: &str = r#"
 $dir = $env:HW_UNINSTALL_DIR.TrimEnd('\') + '\'
 $self = [int]$env:HW_UNINSTALL_PID
-$procs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
-    $_.Id -ne $self -and $_.Path -and
-    $_.Path.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase)
-})
+function Find-Suite {
+    @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Id -ne $self -and $_.Path -and
+        $_.Path.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+}
+$procs = @(Find-Suite)
 foreach ($p in $procs) { try { [void]$p.CloseMainWindow() } catch {} }
 foreach ($p in $procs) {
     try {
         if (-not $p.WaitForExit(3000)) { $p.Kill(); [void]$p.WaitForExit(5000) }
     } catch {}
 }
+if (@(Find-Suite).Count -gt 0) { exit 3 }
+exit 0
 "#;
 
-    // If PowerShell cannot run, a still-running Suite shows up below as a
-    // file that could not be removed, with a message saying so.
-    let _ = std::process::Command::new("powershell.exe")
+    let status = std::process::Command::new("powershell.exe")
         .args([
             "-NoProfile",
             "-NonInteractive",
@@ -234,6 +318,17 @@ foreach ($p in $procs) {
         .env("HW_UNINSTALL_PID", std::process::id().to_string())
         .creation_flags(CREATE_NO_WINDOW)
         .status();
+
+    match status {
+        Ok(s) if s.code() == Some(STILL_RUNNING) => Err(
+            "Hardwave Suite is still running and could not be closed. Close it \
+             (also in the system tray), then try again."
+                .to_string(),
+        ),
+        // If PowerShell cannot run, a Suite that is still running shows up in
+        // the next step as files in use, with a message saying so.
+        _ => Ok(()),
+    }
 }
 
 /// Refuses folders that can never be a Suite install on their own (a drive
@@ -292,7 +387,7 @@ fn remove_folder_contents(dir: &Path, keep: Option<&Path>) -> Result<(), String>
     } else {
         Err(format!(
             "Some files in {} are in use and could not be deleted: {}.\n\n\
-             Close Hardwave Suite (also in the system tray), then run the uninstaller again.",
+             Close Hardwave Suite (also in the system tray), then try again.",
             dir.display(),
             failed.join(", ")
         ))
