@@ -412,6 +412,9 @@ fn delete_key(hkcu: &RegKey, path: &str) -> Result<(), String> {
 /// Waits about three seconds with `ping`, then runs `rmdir /s /q "<dir>"`, in a detached cmd.
 /// Not `timeout`: without a console it exits at once ("Input redirection is not supported"),
 /// so the rmdir ran while this uninstaller was still running and the folder stayed.
+/// The command line goes to cmd.exe verbatim (raw_arg): args() escapes the quotes around the
+/// path as \", which cmd.exe does not read, so rmdir got an invalid path ("The filename,
+/// directory name, or volume label syntax is incorrect") and the folder stayed as well.
 fn schedule_delayed_cleanup(dir: &Path) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -420,7 +423,7 @@ fn schedule_delayed_cleanup(dir: &Path) {
     let dir_str = dir.to_string_lossy().to_string();
     let cmd = format!("ping -n 4 127.0.0.1 > nul & rmdir /s /q \"{}\"", dir_str);
     let _ = std::process::Command::new("cmd.exe")
-        .args(["/C", &cmd])
+        .raw_arg(format!("/C {cmd}"))
         .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
         .spawn();
 }
