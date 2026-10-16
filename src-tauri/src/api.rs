@@ -19,7 +19,11 @@ pub async fn login(email: &str, password: &str) -> Result<AuthResponse, String> 
     // Never put the response body in the error: a login response can carry the auth token, and the
     // error text ends up in logs and on screen. The length is enough to tell an empty reply from HTML.
     serde_json::from_str::<AuthResponse>(&body).map_err(|e| {
-        format!("Login parse error: {} (response of {} bytes)", e, body.len())
+        format!(
+            "Login parse error: {} (response of {} bytes)",
+            e,
+            body.len()
+        )
     })
 }
 
@@ -59,7 +63,11 @@ pub async fn get_downloads(token: &str) -> Result<Vec<Product>, String> {
         .map_err(|e| format!("Failed to read downloads response: {}", e))?;
 
     let data = serde_json::from_str::<DownloadsResponse>(&body).map_err(|e| {
-        format!("Downloads parse error: {} (response of {} bytes)", e, body.len())
+        format!(
+            "Downloads parse error: {} (response of {} bytes)",
+            e,
+            body.len()
+        )
     })?;
 
     if !data.success {

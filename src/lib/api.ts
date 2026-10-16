@@ -377,6 +377,16 @@ export async function openExternalUrl(url: string): Promise<void> {
   return invoke('open_external_url', { url })
 }
 
+/** True for http and https links only, the same rule open_external_url applies. */
+export function isWebUrl(url: string): boolean {
+  try {
+    const { protocol } = new URL(url)
+    return protocol === 'http:' || protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 export async function onBetaSoftWarning(
   callback: (e: BetaWarningEvent) => void,
 ): Promise<() => void> {

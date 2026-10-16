@@ -23,7 +23,7 @@ const HOW: Record<Daw, Array<{ kbd: string; rest?: string }>> = {
 const DAWS: Daw[] = ['FL Studio', 'Ableton', 'Bitwig', 'Reaper']
 
 function open(url: string) {
-  api.openExternalUrl(url).catch(() => { window.open(url, '_blank') })
+  api.openExternalUrl(url).catch(() => { if (api.isWebUrl(url)) window.open(url, '_blank') })
 }
 
 interface Props {

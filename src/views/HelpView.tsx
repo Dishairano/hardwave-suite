@@ -5,7 +5,7 @@ const SITE = 'https://hardwavestudios.com'
 const DISCORD = 'https://discord.gg/hardwave'
 
 function open(url: string) {
-  api.openExternalUrl(url).catch(() => { window.open(url, '_blank') })
+  api.openExternalUrl(url).catch(() => { if (api.isWebUrl(url)) window.open(url, '_blank') })
 }
 
 const GUIDES: Array<[string, string, string]> = [

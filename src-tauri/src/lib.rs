@@ -2263,13 +2263,55 @@ async fn install_beta_build(
     Ok(install_dir.to_string_lossy().to_string())
 }
 
+/// Parses `raw` and accepts it only as an http or https link, so a file:,
+/// javascript: or custom-scheme link can never be launched from the window.
+fn checked_web_url(raw: &str) -> Result<url::Url, String> {
+    let parsed = url::Url::parse(raw).map_err(|e| format!("Not a valid link: {}", e))?;
+    match parsed.scheme() {
+        "http" | "https" => Ok(parsed),
+        other => Err(format!("Refusing to open a {}: link", other)),
+    }
+}
+
+#[cfg(test)]
+mod open_url_tests {
+    use super::checked_web_url;
+
+    #[test]
+    fn only_web_links_are_accepted() {
+        assert!(checked_web_url("https://hardwavestudios.com/pricing").is_ok());
+        assert!(checked_web_url("http://hardwavestudios.com/").is_ok());
+        assert!(checked_web_url("file:///C:/Windows/System32/calc.exe").is_err());
+        assert!(checked_web_url("javascript:alert(1)").is_err());
+        assert!(checked_web_url("ms-settings:privacy").is_err());
+        assert!(checked_web_url("not a link").is_err());
+        assert!(checked_web_url("").is_err());
+    }
+
+    #[test]
+    fn a_link_with_several_query_parameters_stays_whole() {
+        let url = checked_web_url("https://hardwavestudios.com/x?a=1&b=2&c=3").unwrap();
+        assert_eq!(url.as_str(), "https://hardwavestudios.com/x?a=1&b=2&c=3");
+        let pairs: Vec<_> = url
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        assert_eq!(pairs.len(), 3);
+        assert_eq!(pairs[1], ("b".to_string(), "2".to_string()));
+        // The same & only gets through on a web scheme.
+        assert!(checked_web_url("file:///x?a=1&b=2").is_err());
+        assert!(checked_web_url("ms-settings:x?a=1&calc").is_err());
+    }
+}
+
 #[tauri::command]
 async fn open_external_url(url: String) -> Result<(), String> {
+    let url = checked_web_url(&url)?;
+    // ShellExecuteW through the opener plugin: the link is never parsed by
+    // cmd.exe, so & | < > ^ in it stay part of the link.
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", url.as_str()])
-            .spawn()
+        tauri_plugin_opener::open_url(url.as_str(), None::<&str>)
             .map_err(|e| format!("Failed to open URL: {}", e))?;
     }
     #[cfg(target_os = "macos")]
