@@ -54,3 +54,55 @@ export async function onProgress(
 ): Promise<UnlistenFn> {
   return listen<InstallProgress>("install://progress", (e) => handler(e.payload));
 }
+
+// ─── Uninstall mode ──────────────────────────────────────────────────────────
+
+export type LaunchMode = "install" | "uninstall";
+
+export type UninstallStep =
+  | "close_app"
+  | "remove_plugins"
+  | "remove_install_folder"
+  | "remove_shortcuts"
+  | "remove_registry_keys";
+
+/** The steps of this uninstall and how many are done. */
+export interface UninstallProgress {
+  steps: UninstallStep[];
+  done: number;
+}
+
+/** Why the uninstall stopped: the step that could not finish, and what to do. */
+export interface UninstallFailure {
+  step: UninstallStep | null;
+  reason: string;
+}
+
+/** Which screens to show, decided by the exe from its arguments and its name. */
+export async function launchMode(): Promise<LaunchMode> {
+  return invoke<LaunchMode>("launch_mode");
+}
+
+/** Names of the plug-ins the Suite installed that are on this computer. Reads only. */
+export async function uninstallOverview(): Promise<string[]> {
+  return invoke<string[]>("uninstall_overview");
+}
+
+/** Removes the Suite, and its plug-ins when `removePlugins` is set. */
+export async function startUninstall(removePlugins: boolean): Promise<void> {
+  try {
+    await invoke("start_uninstall", { removePlugins });
+  } catch (e) {
+    const failure: UninstallFailure =
+      e && typeof e === "object" && "reason" in e
+        ? (e as UninstallFailure)
+        : { step: null, reason: String(e) };
+    throw failure;
+  }
+}
+
+export async function onUninstallProgress(
+  handler: (p: UninstallProgress) => void
+): Promise<UnlistenFn> {
+  return listen<UninstallProgress>("uninstall://progress", (e) => handler(e.payload));
+}

@@ -92,3 +92,16 @@ p.sub { margin: 8px 0 0; color: var(--dim); font-size: 14.5px; line-height: 1.5;
 .logrow { margin-top: 12px; font: 500 11px var(--mono); color: var(--faint); background: #000; border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; line-height: 1.6; max-height: 76px; overflow: hidden; }
 .logrow b { color: #86efac; font-weight: 500; }
 .errbox { margin-top: 12px; font: 500 11.5px var(--mono); color: #fecaca; background: rgba(220, 38, 38, .1); border: 1px solid rgba(220, 38, 38, .35); border-radius: 8px; padding: 8px 10px; max-height: 90px; overflow: auto; user-select: text; }
+
+/* uninstall: what stays and what goes */
+.sg { margin-top: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sg > div { border: 1px solid var(--line); border-radius: 10px; background: var(--s1); padding: 12px 14px; min-width: 0; }
+.sg h2 { margin: 0 0 8px; font: 600 11px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--faint); }
+.sg .goes h2 { color: #fca5a5; }
+.sg ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 13.5px; line-height: 1.35; color: var(--muted); }
+.sg li { display: flex; gap: 8px; }
+.sg .stays li:before { content: "✓"; color: var(--ok); flex: none; }
+.sg .goes li:before { content: "×"; color: var(--red); flex: none; }
+.opt.two { align-items: flex-start; margin-top: 14px; }
+.opt.two i { margin-top: 2px; }
+.opt small { display: block; margin-top: 2px; font-size: 12px; color: var(--faint); }
