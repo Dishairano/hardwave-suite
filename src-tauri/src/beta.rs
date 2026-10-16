@@ -251,7 +251,11 @@ pub async fn fetch_subscription(token: &str) -> Result<SubscriptionInfo, String>
         .map_err(|e| format!("Failed to read subscription response: {}", e))?;
 
     let raw: SubscriptionRaw = serde_json::from_str(&body).map_err(|e| {
-        format!("Subscription parse error: {} (response of {} bytes)", e, body.len())
+        format!(
+            "Subscription parse error: {} (response of {} bytes)",
+            e,
+            body.len()
+        )
     })?;
 
     if !raw.success && raw.error.is_some() {
@@ -288,7 +292,11 @@ pub async fn fetch_beta_manifest(token: &str) -> Result<Vec<BetaPlugin>, String>
         .map_err(|e| format!("Failed to read beta manifest response: {}", e))?;
 
     let raw: ManifestRaw = serde_json::from_str(&body).map_err(|e| {
-        format!("Beta manifest parse error: {} (response of {} bytes)", e, body.len())
+        format!(
+            "Beta manifest parse error: {} (response of {} bytes)",
+            e,
+            body.len()
+        )
     })?;
 
     Ok(raw

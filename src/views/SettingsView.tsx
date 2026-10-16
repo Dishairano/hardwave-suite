@@ -5,7 +5,7 @@ import type { SubscriptionInfo, User } from '../lib/api'
 const SITE = 'https://hardwavestudios.com'
 
 function open(url: string) {
-  api.openExternalUrl(url).catch(() => { window.open(url, '_blank') })
+  api.openExternalUrl(url).catch(() => { if (api.isWebUrl(url)) window.open(url, '_blank') })
 }
 
 interface Props {
