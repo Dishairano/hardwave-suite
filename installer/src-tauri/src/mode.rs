@@ -106,9 +106,13 @@ mod tests {
     }
 
     #[test]
-    fn quiet_argument_skips_dialogs() {
+    fn quiet_argument_uninstalls_without_a_window() {
         assert_eq!(
             decide(&["--uninstall", "--quiet"], Some(&uninstaller())),
+            Mode::Uninstall { quiet: true }
+        );
+        assert_eq!(
+            decide(&["--uninstall", "--quiet"], Some(&installer())),
             Mode::Uninstall { quiet: true }
         );
         assert_eq!(

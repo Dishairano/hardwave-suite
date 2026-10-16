@@ -7,18 +7,39 @@
 //!   3. Downloads a portable zip of the Suite from the GitHub release.
 //!   4. Extracts it, creates shortcuts, registers an uninstall entry.
 //!   5. Launches the Suite.
+//!
+//! Started in uninstall mode (see `mode`), the same window shows the
+//! uninstall screens instead, and never the install screens.
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 mod acl;
 mod install;
 mod mode;
+// The uninstall steps run on Windows; the tests check them on every platform.
+#[cfg(any(windows, test))]
+mod removal;
 #[cfg(windows)]
 mod shortcut;
 #[cfg(windows)]
 mod uninstall;
+
+/// Uninstalling is for Windows: elsewhere the window's uninstall commands say so.
+#[cfg(not(windows))]
+mod uninstall {
+    #[tauri::command]
+    pub fn uninstall_overview() -> Vec<String> {
+        Vec::new()
+    }
+
+    #[tauri::command]
+    pub fn start_uninstall(remove_plugins: bool) -> Result<(), String> {
+        let _ = remove_plugins;
+        Err("Uninstall is only supported on Windows.".to_string())
+    }
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -48,6 +69,9 @@ pub struct InstallOptions {
 pub struct InstallState {
     pub cancel: Arc<std::sync::atomic::AtomicBool>,
 }
+
+/// Which screens the window shows, decided once at start-up by `mode::decide`.
+struct LaunchMode(&'static str);
 
 // ─── Commands ────────────────────────────────────────────────────────────────
 
@@ -181,41 +205,78 @@ fn quit(app: AppHandle) {
     app.exit(0);
 }
 
+/// "install" or "uninstall": which screens the window shows.
+#[tauri::command]
+fn launch_mode(mode: State<'_, LaunchMode>) -> &'static str {
+    mode.0
+}
+
 // ─── Entry ───────────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Uninstall mode (an uninstall argument, or this exe is the copied
-    // "Hardwave Suite Uninstaller.exe"): run the uninstall path and exit
-    // without ever starting the install window.
+    // "Hardwave Suite Uninstaller.exe"): the window shows the uninstall
+    // screens, and --quiet removes the app without a window at all.
     let args: Vec<String> = std::env::args_os()
         .skip(1)
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
     let exe = std::env::current_exe().ok();
-    if let mode::Mode::Uninstall { quiet } = mode::decide(&args, exe.as_deref()) {
+    let uninstalling = match mode::decide(&args, exe.as_deref()) {
+        mode::Mode::Install => false,
         #[cfg(windows)]
-        std::process::exit(uninstall::run_interactive(quiet));
+        mode::Mode::Uninstall { quiet: true } => std::process::exit(uninstall::run_quiet()),
+        #[cfg(windows)]
+        mode::Mode::Uninstall { quiet: false } => true,
         #[cfg(not(windows))]
-        {
+        mode::Mode::Uninstall { quiet } => {
             let _ = quiet;
             eprintln!("Uninstall is only supported on Windows.");
             std::process::exit(1);
         }
-    }
+    };
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(InstallState::default())
+        .manage(LaunchMode(if uninstalling {
+            "uninstall"
+        } else {
+            "install"
+        }));
+    #[cfg(windows)]
+    let builder = builder.manage(uninstall::UninstallState::default());
+
+    builder
+        .setup(move |app| {
+            if uninstalling {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_title("Uninstall Hardwave Suite");
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             fetch_latest_version,
             default_install_dir,
             start_install,
             cancel_install,
             launch_installed,
-            quit
+            quit,
+            launch_mode,
+            uninstall::uninstall_overview,
+            uninstall::start_uninstall
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running hardwave-suite-installer");
+        .build(tauri::generate_context!())
+        .expect("error while building hardwave-suite-installer")
+        .run(|_app, _event| {
+            // A finished uninstall leaves the install folder, which held this
+            // exe; it is removed once the window has closed.
+            #[cfg(windows)]
+            if let tauri::RunEvent::Exit = _event {
+                uninstall::cleanup_after_exit(_app);
+            }
+        });
 }

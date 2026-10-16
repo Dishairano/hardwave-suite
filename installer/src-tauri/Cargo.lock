@@ -1351,7 +1351,6 @@ dependencies = [
  "futures-util",
  "mslnk",
  "reqwest 0.12.28",
- "rfd",
  "serde",
  "serde_json",
  "tauri",
