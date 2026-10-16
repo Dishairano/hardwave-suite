@@ -234,7 +234,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: suite-test-${{ matrix.platform }}${{ matrix.target && format('-{0}', matrix.target) || '' }}
+          # HardwaveSuite-Setup.exe is what people download and what uninstalls the Suite, so a test
+          # build has to carry it too; without it the uninstaller could only be tested after a release.
           path: |
+            HardwaveSuite-Setup.exe
+            hardwave-suite-portable-windows.zip
             src-tauri/target/**/release/bundle/**/*.dmg
             src-tauri/target/**/release/bundle/**/*.exe
             src-tauri/target/**/release/bundle/**/*.msi
