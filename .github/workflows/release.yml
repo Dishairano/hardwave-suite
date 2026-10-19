@@ -105,6 +105,13 @@ jobs:
       - name: Create portable Windows zip
         if: matrix.platform == 'windows-latest'
         shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
         run: |
           $staging = "staging/Hardwave Suite"
           New-Item -ItemType Directory -Force -Path $staging | Out-Null
@@ -113,6 +120,12 @@ jobs:
           $rawExe = Get-ChildItem -Path src-tauri/target/release -Filter "hardwave-suite.exe" -File | Select-Object -First 1
           if (-not $rawExe) { throw "hardwave-suite.exe not found in target/release" }
           Copy-Item $rawExe.FullName "$staging/Hardwave Suite.exe"
+
+          # The raw exe is not what Tauri signs (it signs the copies it bundles), so the portable app,
+          # which HardwaveSuite-Setup.exe installs, shipped unsigned. Found 19 Oct 2026 testing 0.23.6:
+          # the uninstaller refresh compares a download's signer with the running Suite's own and
+          # refused, because the running Suite had no signature. Same script and rule as below.
+          ./scripts/sign-windows.ps1 "$staging/Hardwave Suite.exe"
 
           # Include any resource DLLs sitting next to the binary (e.g. WebView2Loader if not statically linked).
           Get-ChildItem -Path src-tauri/target/release -Filter *.dll -File -ErrorAction SilentlyContinue | ForEach-Object {
