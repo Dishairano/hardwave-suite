@@ -28,9 +28,18 @@ sha2 = "0.10"
 toml = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 url = "2"
+semver = "1"
 
 [target.'cfg(windows)'.dependencies]
 tauri-plugin-opener = "2"
+# WinVerifyTrust, for the signature of a downloaded uninstaller.
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_Security_Cryptography_Catalog",
+    "Win32_Security_Cryptography_Sip",
+    "Win32_Security_WinTrust",
+] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"

@@ -4,6 +4,8 @@ mod beta;
 mod bridge;
 mod collabs;
 mod models;
+#[cfg(any(windows, test))]
+mod uninstaller;
 
 use futures_util::StreamExt;
 use models::DownloadProgress;
@@ -2345,6 +2347,9 @@ pub fn run() {
             }
             // Background expiry watcher for installed beta builds.
             beta::spawn_expiry_watcher(app.handle().clone());
+            // Replaces an uninstaller older than this release, in the background.
+            #[cfg(windows)]
+            uninstaller::spawn_refresh(app.handle());
             Ok(())
         })
         .manage(AppState {
