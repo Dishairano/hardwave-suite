@@ -21,10 +21,9 @@ function bullets(changelog: string | null): string[] {
 
 interface Props {
   lib: Library
-  pro: boolean
 }
 
-export function PluginsView({ lib, pro }: Props) {
+export function PluginsView({ lib }: Props) {
   const [filter, setFilter] = useState<Filter>('all')
   const [paths, setPaths] = useState<Record<string, string>>({})
 
@@ -104,7 +103,7 @@ export function PluginsView({ lib, pro }: Props) {
       ) : (
         <div className="shelf six">
           {list.map((p) => (
-            <PlugTile key={p.id} product={p} state={lib.stateOf(p)} pro={pro} onInstall={() => lib.install(p)} onProLink={() => open(`${SITE}/pricing`)} />
+            <PlugTile key={p.id} product={p} state={lib.stateOf(p)} onInstall={() => lib.install(p)} />
           ))}
         </div>
       )}

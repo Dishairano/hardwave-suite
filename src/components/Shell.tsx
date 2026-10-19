@@ -39,7 +39,7 @@ export function Shell({ user, subscription, appVersion, preloadedProducts, prelo
       <Sidebar active={view} onSelect={select} updateCount={lib.counts.updates} user={user} planLabel={planLabel} onAccountClick={() => setView('settings')} onSignOut={onSignOut} />
       <main className="a2-content">
         {view === 'home' && <HomeView lib={lib} pro={pro} go={setView} />}
-        {view === 'plugins' && <PluginsView lib={lib} pro={pro} />}
+        {view === 'plugins' && <PluginsView lib={lib} />}
         {view === 'workspace' && <WorkspaceView />}
         {view === 'daw' && <DawView />}
         {view === 'academy' && <AcademyView />}

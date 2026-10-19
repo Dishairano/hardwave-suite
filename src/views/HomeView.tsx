@@ -106,7 +106,7 @@ export function HomeView({ lib, pro, go }: Props) {
         ) : (
           <div className="shelf">
             {installed.slice(0, 3).map((p) => (
-              <PlugTile key={p.id} product={p} state={lib.stateOf(p)} pro={pro} onInstall={() => lib.install(p)} onProLink={() => open(`${SITE}/pricing`)} />
+              <PlugTile key={p.id} product={p} state={lib.stateOf(p)} onInstall={() => lib.install(p)} />
             ))}
           </div>
         )}
@@ -114,7 +114,7 @@ export function HomeView({ lib, pro, go }: Props) {
 
       {proNotInstalled.length > 0 && (
         <section>
-          <div className="shelfh"><h2>{pro ? 'Ready with your Pro' : 'With Hardwave Pro'}</h2>{!pro && <button type="button" className="shelf-link" onClick={() => open(`${SITE}/pricing`)}>What Pro gives →</button>}</div>
+          <div className="shelfh"><h2>{pro ? 'Ready with your Pro' : 'Yours to install'}</h2>{!pro && <button type="button" className="shelf-link" onClick={() => open(`${SITE}/pricing`)}>What Pro gives →</button>}</div>
           <div className="pro3">
             {proNotInstalled.slice(0, 3).map((p) => {
               const art = tileArt(p.slug)
@@ -124,9 +124,7 @@ export function HomeView({ lib, pro, go }: Props) {
                 <div key={p.id}>
                   {art ? <img src={art.poster} alt="" /> : <span className="ph" />}
                   <div><b>{shortName(p.name)}</b><small>{busy ? (st.kind === 'downloading' ? `Downloading · ${Math.round(st.percent ?? 0)}%` : 'Installing…') : art?.kind ?? ''}</small></div>
-                  {!busy && (pro
-                    ? <button type="button" className="a2-btn ghost sm" onClick={() => lib.install(p)}>Install</button>
-                    : <span className="chip beta">Pro</span>)}
+                  {!busy && <button type="button" className="a2-btn ghost sm" onClick={() => lib.install(p)}>Install</button>}
                 </div>
               )
             })}
