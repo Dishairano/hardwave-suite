@@ -29,12 +29,18 @@ toml = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 url = "2"
 semver = "1"
+# Reads the expiry from a JWT's payload (session.rs).
+base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
 tauri-plugin-opener = "2"
-# WinVerifyTrust, for the signature of a downloaded uninstaller.
+# WinVerifyTrust, for the signature of a downloaded uninstaller; the Security,
+# Authorization and Threading parts keep the plug-ins' token file user-only.
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
     "Win32_Security_Cryptography",
     "Win32_Security_Cryptography_Catalog",
     "Win32_Security_Cryptography_Sip",
