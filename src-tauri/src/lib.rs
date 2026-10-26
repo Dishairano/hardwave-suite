@@ -4,17 +4,21 @@ mod beta;
 mod bridge;
 mod collabs;
 mod models;
+mod session;
 #[cfg(any(windows, test))]
 mod uninstaller;
 
 use futures_util::StreamExt;
 use models::DownloadProgress;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, State};
 use tokio::io::AsyncWriteExt;
 
 pub struct AppState {
     pub api_token: Mutex<Option<String>>,
+    /// Unix time of the next background renewal of `api_token`.
+    pub renew_at: AtomicI64,
     pub collab: Arc<collabs::CollabState>,
     pub bridge: Arc<bridge::BridgeState>,
     pub automix: Arc<automix::AutoMixState>,
@@ -45,22 +49,11 @@ fn shared_vst_token_path() -> Option<std::path::PathBuf> {
 }
 
 /// Write or clear the shared auth token file so VST plugins pick it up
-/// without requiring a separate login.
+/// without requiring a separate login. The file is readable by this user only.
+/// Only an explicit sign-out clears it; an expired session leaves it alone.
 fn sync_vst_token(token: Option<&str>) {
     if let Some(path) = shared_vst_token_path() {
-        match token {
-            Some(t) => {
-                if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::write(&path, t);
-            }
-            None => {
-                if path.exists() {
-                    let _ = std::fs::remove_file(&path);
-                }
-            }
-        }
+        session::sync_shared_token(&path, token);
     }
 }
 
@@ -711,9 +704,47 @@ async fn login(
         if let Some(ref token) = res.token {
             *state.api_token.lock().unwrap() = Some(token.clone());
             sync_vst_token(Some(token));
+            state.renew_at.store(
+                chrono::Utc::now().timestamp() + session::RENEW_EVERY_SECS,
+                Ordering::Relaxed,
+            );
         }
     }
     Ok(res)
+}
+
+/// On start, with the token the front end saved: renews it when it is still valid,
+/// or carries on with a newer valid token a plug-in left in the shared file. The
+/// token in use is stored here and in the shared file and returned for the front
+/// end to save. Returns None when the session expired; the shared file then stays.
+#[tauri::command]
+async fn restore_session(
+    token: String,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let shared_file = shared_vst_token_path();
+    let outcome = session::renew_session(
+        Some(token),
+        &state.api_token,
+        &state.renew_at,
+        shared_file.as_deref(),
+        chrono::Utc::now().timestamp(),
+        |t| async move { api::refresh_token(&t).await },
+    )
+    .await;
+    if let session::Renewal::Kept { why, .. } = &outcome {
+        tauri_plugin_log::log::warn!("[session] token not renewed on start: {why}");
+    }
+    Ok(outcome.token().map(str::to_string))
+}
+
+/// Forgets the token in this app only, for a session the server no longer accepts.
+/// No server sign-out, and the plug-ins' shared token file stays: only `logout`,
+/// the person's own sign-out, deletes it.
+#[tauri::command]
+async fn clear_token(state: State<'_, AppState>) -> Result<(), String> {
+    *state.api_token.lock().unwrap() = None;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2347,6 +2378,8 @@ pub fn run() {
             }
             // Background expiry watcher for installed beta builds.
             beta::spawn_expiry_watcher(app.handle().clone());
+            // Renews the sign-in every 12 hours while the Suite runs.
+            session::spawn_renewal(app.handle().clone());
             // Replaces an uninstaller older than this release, in the background.
             #[cfg(windows)]
             uninstaller::spawn_refresh(app.handle());
@@ -2354,6 +2387,7 @@ pub fn run() {
         })
         .manage(AppState {
             api_token: Mutex::new(None),
+            renew_at: AtomicI64::new(0),
             collab: Arc::new(collabs::CollabState::new()),
             bridge: Arc::new(bridge::BridgeState::new()),
             automix: Arc::new(automix::AutoMixState::new()),
@@ -2363,6 +2397,8 @@ pub fn run() {
             logout,
             get_auth_status,
             set_token,
+            restore_session,
+            clear_token,
             get_purchases,
             download_and_install,
             get_installed_versions,

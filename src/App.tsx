@@ -61,8 +61,18 @@ export default function App() {
 
       if (saved) {
         try {
-          await api.setToken(saved.token)
-          const valid = await api.getAuthStatus()
+          let token: string | null
+          try {
+            // Renews a still-valid token, or picks up a newer one a plug-in renewed.
+            token = await api.restoreSession(saved.token)
+          } catch (e) {
+            if (!api.isMissingCommand(e, 'restore_session')) throw e
+            // An older Suite binary: check the saved token as before.
+            await api.setToken(saved.token)
+            token = saved.token
+          }
+          if (token && token !== saved.token) api.saveSession(token, saved.user)
+          const valid = token !== null && (await api.getAuthStatus())
           if (valid) {
             setUser(saved.user)
             authenticated = true
@@ -70,8 +80,10 @@ export default function App() {
               setShowOnboarding(true)
             }
           } else {
+            // Sign in again. Only signing out deletes the plug-ins' shared token,
+            // so an expired session ends in the Suite alone.
             api.clearSession()
-            try { await api.logout() } catch { /* clear shared token */ }
+            try { await api.clearToken() } catch { /* older binary */ }
           }
         } catch {
           setUser(saved.user)
@@ -104,6 +116,17 @@ export default function App() {
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => {})
+  }, [])
+
+  // The backend renews the token every 12 hours; keep a saved session in step so
+  // the next start begins with the renewed token.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    api.onTokenRenewed((token) => {
+      const saved = api.loadSession()
+      if (saved) api.saveSession(token, saved.user)
+    }).then((u) => { unlisten = u }).catch(() => {})
+    return () => { unlisten?.() }
   }, [])
 
   const loadChannelAndSubscription = useCallback(async () => {

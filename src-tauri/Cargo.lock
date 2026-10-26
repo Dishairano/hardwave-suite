@@ -1680,6 +1680,7 @@ dependencies = [
 name = "hardwave-suite"
 version = "0.23.1"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "dirs 5.0.1",
  "flate2",

@@ -68,6 +68,34 @@ export async function getAuthStatus(): Promise<boolean> {
   return invoke<boolean>('get_auth_status')
 }
 
+/**
+ * On start, with the saved token: the backend renews it while it is still valid,
+ * or carries on with a newer valid token a plug-in left in the shared token file.
+ * Resolves to the token now in use (save it), or null when the session expired.
+ * The plug-ins' shared token file is never deleted here.
+ */
+export async function restoreSession(token: string): Promise<string | null> {
+  return invoke<string | null>('restore_session', { token })
+}
+
+/** Forgets the token in the backend only: no server sign-out, the plug-ins keep theirs. */
+export async function clearToken(): Promise<void> {
+  return invoke('clear_token')
+}
+
+/** True when the running Suite binary predates `cmd` (the page is served newer than the app). */
+export function isMissingCommand(e: unknown, cmd: string): boolean {
+  const msg = String(e)
+  return msg.includes(`Command ${cmd} not found`) || msg.includes(`Command ${cmd} not allowed`)
+}
+
+/** Fires when the backend renewed the token in the background (every 12 hours). */
+export async function onTokenRenewed(callback: (token: string) => void): Promise<() => void> {
+  if (!isTauri) return () => {}
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<string>('auth:renewed', (e) => callback(e.payload))
+}
+
 // Products / Downloads
 export async function getProducts(): Promise<Product[]> {
   return invoke<Product[]>('get_purchases')
