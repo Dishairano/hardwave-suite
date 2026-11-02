@@ -10,15 +10,13 @@ mod uninstaller;
 
 use futures_util::StreamExt;
 use models::DownloadProgress;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex};
-use tauri::{Emitter, State};
+use std::sync::Arc;
+use tauri::{Emitter, Manager, State};
 use tokio::io::AsyncWriteExt;
 
 pub struct AppState {
-    pub api_token: Mutex<Option<String>>,
-    /// Unix time of the next background renewal of `api_token`.
-    pub renew_at: AtomicI64,
+    /// The sign-in: the token every request uses, following the shared token file.
+    pub session: session::SessionState,
     pub collab: Arc<collabs::CollabState>,
     pub bridge: Arc<bridge::BridgeState>,
     pub automix: Arc<automix::AutoMixState>,
@@ -50,7 +48,8 @@ fn shared_vst_token_path() -> Option<std::path::PathBuf> {
 
 /// Write or clear the shared auth token file so VST plugins pick it up
 /// without requiring a separate login. The file is readable by this user only.
-/// Only an explicit sign-out clears it; an expired session leaves it alone.
+/// Only the Suite's own sign-in writes it this way and only its own sign-out
+/// clears it; a renewal writes it through `session::renew_in_use`.
 fn sync_vst_token(token: Option<&str>) {
     if let Some(path) = shared_vst_token_path() {
         session::sync_shared_token(&path, token);
@@ -702,86 +701,112 @@ async fn login(
     let res = api::login(&email, &password).await?;
     if res.success {
         if let Some(ref token) = res.token {
-            *state.api_token.lock().unwrap() = Some(token.clone());
+            // Signing in here is the newest change, so it is written whatever the
+            // file held: every Hardwave program on the computer is signed in.
+            state
+                .session
+                .signed_in(token.clone(), chrono::Utc::now().timestamp());
             sync_vst_token(Some(token));
-            state.renew_at.store(
-                chrono::Utc::now().timestamp() + session::RENEW_EVERY_SECS,
-                Ordering::Relaxed,
-            );
         }
     }
     Ok(res)
 }
 
-/// On start, with the token the front end saved: renews it when it is still valid,
-/// or carries on with a newer valid token a plug-in left in the shared file. The
-/// token in use is stored here and in the shared file and returned for the front
-/// end to save. Returns None when the session expired; the shared file then stays.
+/// Follows the shared token file and says where the sign-in stands. The window asks
+/// when it starts and whenever it comes back to the front, so a sign-in or sign-out
+/// in the DAW or a plug-in shows here too. A sign-in that is due a renewal (one
+/// older than 12 hours) is renewed in the background afterwards; the window gets
+/// the new token through `auth:renewed`.
+#[tauri::command]
+async fn sync_session(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<session::Session, String> {
+    Ok(follow_and_renew(&app, &state).await)
+}
+
+async fn follow_and_renew(app: &tauri::AppHandle, state: &AppState) -> session::Session {
+    let now = chrono::Utc::now().timestamp();
+    let outcome = session::follow_live(&state.session, now).await;
+    if state.session.renewal_due(now) {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            session::renew_and_tell(&app, &state.session, chrono::Utc::now().timestamp()).await;
+        });
+    }
+    outcome
+}
+
+/// For a window from before `sync_session` (the window is served from the site and
+/// can be older than this app): follows the shared token file as `sync_session`
+/// does, and returns the token in use when it belongs to the account that window
+/// saved (`token`); the window then checks it itself. None means signed out, or
+/// another account signed in elsewhere, which that window cannot show: it asks for
+/// a sign-in.
 #[tauri::command]
 async fn restore_session(
     token: String,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
-    let shared_file = shared_vst_token_path();
-    let outcome = session::renew_session(
-        Some(token),
-        &state.api_token,
-        &state.renew_at,
-        shared_file.as_deref(),
-        chrono::Utc::now().timestamp(),
-        |t| async move { api::refresh_token(&t).await },
-    )
-    .await;
-    if let session::Renewal::Kept { why, .. } = &outcome {
-        tauri_plugin_log::log::warn!("[session] token not renewed on start: {why}");
-    }
-    Ok(outcome.token().map(str::to_string))
+    follow_and_renew(&app, &state).await;
+    Ok(state
+        .session
+        .token()
+        .filter(|in_use| session::same_account(in_use, &token)))
 }
 
 /// Forgets the token in this app only, for a session the server no longer accepts.
-/// No server sign-out, and the plug-ins' shared token file stays: only `logout`,
-/// the person's own sign-out, deletes it.
+/// No server sign-out, and the shared token file stays: only `logout`, the person's
+/// own sign-out, deletes it.
 #[tauri::command]
 async fn clear_token(state: State<'_, AppState>) -> Result<(), String> {
-    *state.api_token.lock().unwrap() = None;
+    state.session.sign_out();
     Ok(())
 }
 
+/// Signs this computer out: the token is forgotten here and the shared token file
+/// deleted, so the DAW and the plug-ins sign out too. Then the site is told, so the
+/// tokens stop working at once instead of when they run out: the one in use and,
+/// when another program put a different one in the file, that one too.
 #[tauri::command]
 async fn logout(state: State<'_, AppState>) -> Result<(), String> {
-    let token = state.api_token.lock().unwrap().clone();
-    if let Some(t) = token {
-        let _ = api::logout(&t).await;
-    }
-    *state.api_token.lock().unwrap() = None;
+    let mut tokens: Vec<String> = state.session.sign_out().into_iter().collect();
+    let in_file = shared_vst_token_path()
+        .as_deref()
+        .and_then(session::read_shared_token);
     sync_vst_token(None);
+    if let Some(t) = in_file.filter(|t| !tokens.contains(t)) {
+        tokens.push(t);
+    }
+    futures_util::future::join_all(tokens.iter().map(|t| api::logout(t))).await;
     Ok(())
 }
 
 #[tauri::command]
 async fn get_auth_status(state: State<'_, AppState>) -> Result<bool, String> {
-    let token = state.api_token.lock().unwrap().clone();
-    match token {
+    match state.session.token() {
         Some(t) => api::get_auth_status(&t).await,
         None => Ok(false),
     }
 }
 
+/// A token from a window from before `restore_session`. It is used here, but the
+/// shared token file is not written: only a sign-in or a renewal by the Suite does
+/// that, so a stale token from a window never replaces a newer sign-in or a
+/// sign-out made elsewhere.
 #[tauri::command]
 async fn set_token(token: String, state: State<'_, AppState>) -> Result<(), String> {
-    *state.api_token.lock().unwrap() = Some(token.clone());
-    sync_vst_token(Some(&token));
+    state
+        .session
+        .use_unconfirmed(token, chrono::Utc::now().timestamp());
     Ok(())
 }
 
 #[tauri::command]
 async fn get_purchases(state: State<'_, AppState>) -> Result<Vec<models::Product>, String> {
-    let token = state
-        .api_token
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("Not authenticated")?;
+    let token = state.session.token().ok_or("Not authenticated")?;
     api::get_downloads(&token).await
 }
 
@@ -1238,7 +1263,7 @@ async fn download_and_install(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let token = state.api_token.lock().unwrap().clone();
+    let token = state.session.token();
 
     let (tmp_path, downloaded) =
         download_with_resume(&url, &token, &filename, &file_id, &app).await?;
@@ -2133,12 +2158,7 @@ fn dismiss_crash_report() {
 
 #[tauri::command]
 async fn collab_create(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
-    let token = state
-        .api_token
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("Not authenticated")?;
+    let token = state.session.token().ok_or("Not authenticated")?;
     let collab = state.collab.clone();
     let br = state.bridge.clone();
 
@@ -2158,12 +2178,7 @@ async fn collab_join(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let token = state
-        .api_token
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("Not authenticated")?;
+    let token = state.session.token().ok_or("Not authenticated")?;
     let collab = state.collab.clone();
     let br = state.bridge.clone();
 
@@ -2218,23 +2233,13 @@ async fn bridge_status(state: State<'_, AppState>) -> Result<serde_json::Value, 
 async fn get_subscription_info(
     state: State<'_, AppState>,
 ) -> Result<beta::SubscriptionInfo, String> {
-    let token = state
-        .api_token
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("Not authenticated")?;
+    let token = state.session.token().ok_or("Not authenticated")?;
     beta::fetch_subscription(&token).await
 }
 
 #[tauri::command]
 async fn get_beta_manifest(state: State<'_, AppState>) -> Result<Vec<beta::BetaPlugin>, String> {
-    let token = state
-        .api_token
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("Not authenticated")?;
+    let token = state.session.token().ok_or("Not authenticated")?;
     beta::fetch_beta_manifest(&token).await
 }
 
@@ -2275,7 +2280,7 @@ async fn install_beta_build(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let token = state.api_token.lock().unwrap().clone();
+    let token = state.session.token();
     let (artefact, filename) =
         beta::download_verified_artefact(token.as_deref(), &slug, &url, &sha256).await?;
     let installed = install_downloaded_bundle(
@@ -2378,16 +2383,16 @@ pub fn run() {
             }
             // Background expiry watcher for installed beta builds.
             beta::spawn_expiry_watcher(app.handle().clone());
-            // Renews the sign-in every 12 hours while the Suite runs.
-            session::spawn_renewal(app.handle().clone());
+            // Follows the shared sign-in and renews it every 12 hours while the
+            // Suite runs.
+            session::spawn_background(app.handle().clone());
             // Replaces an uninstaller older than this release, in the background.
             #[cfg(windows)]
             uninstaller::spawn_refresh(app.handle());
             Ok(())
         })
         .manage(AppState {
-            api_token: Mutex::new(None),
-            renew_at: AtomicI64::new(0),
+            session: session::SessionState::default(),
             collab: Arc::new(collabs::CollabState::new()),
             bridge: Arc::new(bridge::BridgeState::new()),
             automix: Arc::new(automix::AutoMixState::new()),
@@ -2398,6 +2403,7 @@ pub fn run() {
             get_auth_status,
             set_token,
             restore_session,
+            sync_session,
             clear_token,
             get_purchases,
             download_and_install,
