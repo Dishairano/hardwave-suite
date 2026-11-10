@@ -2058,71 +2058,7 @@ fn check_crash_report() -> Option<serde_json::Value> {
     }))
 }
 
-/// Upload the crash log to the Hardwave document archive and clear the sentinel.
-#[tauri::command]
-async fn upload_crash_report() -> Result<String, String> {
-    let pending = hardwave_data_dir().join("analyser-crash-pending");
-    let content = std::fs::read_to_string(&pending).unwrap_or_default();
-    let lines: Vec<&str> = content.lines().collect();
-    let plugin = lines.first().unwrap_or(&"analyser").to_string();
-
-    let log_path = hardwave_data_dir().join(format!("{}-crash.log", plugin));
-    if !log_path.exists() {
-        // No crash log to upload — just clear sentinel
-        let _ = std::fs::remove_file(&pending);
-        return Err("No crash log found".into());
-    }
-
-    let log_content =
-        std::fs::read(&log_path).map_err(|e| format!("Failed to read crash log: {}", e))?;
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let filename = format!("{}-crash-{}.log", plugin, ts);
-
-    // Upload to the Hardwave document archive
-    let client = reqwest::Client::new();
-    let form = reqwest::multipart::Form::new()
-        .text("category", "crash-reports")
-        .text(
-            "description",
-            format!("Crash report from {} plugin", plugin),
-        )
-        .part(
-            "file",
-            reqwest::multipart::Part::bytes(log_content)
-                .file_name(filename)
-                .mime_str("text/plain")
-                .unwrap(),
-        );
-
-    let res = client
-        .post("https://erp.hardwavestudios.com/api/erp/archive")
-        .header(
-            "x-api-key",
-            "540f288f51ee8029e2d9c085c4ea0b58880dfdde8c68b33b66847829cbd5235e",
-        )
-        .header("x-server-origin", "hardwave-suite")
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|e| format!("Upload failed: {}", e))?;
-
-    if !res.status().is_success() {
-        let status = res.status();
-        let body = res.text().await.unwrap_or_default();
-        return Err(format!("Upload failed ({}): {}", status, body));
-    }
-
-    // Clear the sentinel and the crash log
-    let _ = std::fs::remove_file(&pending);
-    let _ = std::fs::remove_file(&log_path);
-
-    Ok("Crash report uploaded successfully".into())
-}
-
-/// Dismiss the crash report without uploading.
+/// Clear the crash notice. The crash log stays on disk for support to ask for.
 #[tauri::command]
 fn dismiss_crash_report() {
     let pending = hardwave_data_dir().join("analyser-crash-pending");
@@ -2414,7 +2350,6 @@ pub fn run() {
             request_grant_system_acl,
             pick_folder,
             check_crash_report,
-            upload_crash_report,
             dismiss_crash_report,
             collab_create,
             collab_join,
@@ -2441,4 +2376,91 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod no_secret_in_the_app_tests {
+    //! Anything compiled into the Suite can be read back out of the binary,
+    //! so the app must never carry a shared key. Requests to Hardwave
+    //! authenticate as the signed-in user instead. This scans the Rust and
+    //! the UI sources that ship in the app.
+
+    use std::path::{Path, PathBuf};
+
+    fn source_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                source_files(&path, out);
+            } else if matches!(
+                path.extension().and_then(|e| e.to_str()),
+                Some("rs" | "ts" | "tsx" | "js" | "json")
+            ) {
+                out.push(path);
+            }
+        }
+    }
+
+    /// A quoted run of 32 or more hex digits: the shape of an API key or a
+    /// shared secret, which no source file in the app has a reason to hold.
+    fn has_hex_secret(text: &str) -> bool {
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'"' || bytes[i] == b'\'' {
+                let quote = bytes[i];
+                let start = i + 1;
+                let mut j = start;
+                while j < bytes.len() && bytes[j].is_ascii_hexdigit() {
+                    j += 1;
+                }
+                if j - start >= 32 && j < bytes.len() && bytes[j] == quote {
+                    return true;
+                }
+                i = j.max(i + 1);
+            } else {
+                i += 1;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn the_hex_check_finds_a_key_and_ignores_normal_strings() {
+        let key = format!("\"{}\"", "ab12".repeat(16));
+        assert!(has_hex_secret(&format!(".header(\"k\", {key})")));
+        assert!(!has_hex_secret("\"hardwave-suite\" \"deadbeef\""));
+        assert!(!has_hex_secret("let x = 1234567890123456789012345678901234;"));
+    }
+
+    #[test]
+    fn the_app_sources_hold_no_shared_key() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        source_files(&root.join("src"), &mut files);
+        source_files(&root.join("..").join("src"), &mut files);
+        files.push(root.join("tauri.conf.json"));
+        assert!(files.len() > 10, "found too few source files: {}", files.len());
+
+        // Built at run time so this file does not match itself.
+        let key_header = ["x", "api", "key"].join("-");
+        let erp_archive = ["erp.hardwavestudios.com", "/api/erp/archive"].concat();
+
+        let mut problems = Vec::new();
+        for file in &files {
+            let Ok(text) = std::fs::read_to_string(file) else { continue };
+            let name = file.display();
+            if text.to_ascii_lowercase().contains(&key_header) {
+                problems.push(format!("{name}: sends an {key_header} header"));
+            }
+            if text.contains(&erp_archive) {
+                problems.push(format!("{name}: posts to the ERP archive"));
+            }
+            if has_hex_secret(&text) {
+                problems.push(format!("{name}: holds a quoted hex string that looks like a key"));
+            }
+        }
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+    }
 }
