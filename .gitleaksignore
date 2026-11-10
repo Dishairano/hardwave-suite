@@ -1,0 +1,24 @@
+# Historic gitleaks findings, reviewed. Each line is a fingerprint
+# (commit:file:rule:line). Only findings in old commits belong here; a new
+# finding is fixed in the code, never added to this list.
+
+# ERP archive API key, hard-coded in the crash report upload from c5887cd0
+# (2 Apr 2026) until it was removed in the "Remove the ERP archive key" change.
+# Every Suite build in that window carries it. NOT ROTATED YET: the key is to
+# be rotated on the ERP side before the ERP returns (it is paused and answers
+# 503 today). Until then it stays a live credential for whoever has a build.
+c5887cd01b6b3b05012458dd57b7223a91fbacec:src-tauri/src/lib.rs:generic-api-key:879
+
+# JWT_SECRETS fallback list in the library API routes, added with the monorepo
+# split at 1c941b9f (28 Feb 2026). The JWT secret was rotated on 2026-11-10 at
+# 13:13 CET and the old values are refused, so these are dead.
+1c941b9f100ceed7460d92ec6aba878f8067d197:apps/main/src/app/api/library/collections/route.ts:generic-api-key:7
+1c941b9f100ceed7460d92ec6aba878f8067d197:apps/main/src/app/api/library/files/route.ts:generic-api-key:7
+1c941b9f100ceed7460d92ec6aba878f8067d197:apps/main/src/app/api/library/files/sync/route.ts:generic-api-key:7
+1c941b9f100ceed7460d92ec6aba878f8067d197:apps/main/src/app/api/library/stats/route.ts:generic-api-key:7
+1c941b9f100ceed7460d92ec6aba878f8067d197:apps/main/src/app/api/library/tags/route.ts:generic-api-key:7
+1c941b9f100ceed7460d92ec6aba878f8067d197:website/src/app/api/library/collections/route.ts:generic-api-key:7
+1c941b9f100ceed7460d92ec6aba878f8067d197:website/src/app/api/library/files/route.ts:generic-api-key:7
+1c941b9f100ceed7460d92ec6aba878f8067d197:website/src/app/api/library/files/sync/route.ts:generic-api-key:7
+1c941b9f100ceed7460d92ec6aba878f8067d197:website/src/app/api/library/stats/route.ts:generic-api-key:7
+1c941b9f100ceed7460d92ec6aba878f8067d197:website/src/app/api/library/tags/route.ts:generic-api-key:7

@@ -268,10 +268,6 @@ export async function checkCrashReport(): Promise<CrashReport | null> {
   return invoke<CrashReport | null>('check_crash_report')
 }
 
-export async function uploadCrashReport(): Promise<string> {
-  return invoke<string>('upload_crash_report')
-}
-
 export async function dismissCrashReport(): Promise<void> {
   return invoke('dismiss_crash_report')
 }

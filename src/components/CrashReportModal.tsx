@@ -1,5 +1,4 @@
-import { useState } from 'react'
-import { AlertTriangle, Upload, X, Loader2, CheckCircle } from 'lucide-react'
+import { AlertTriangle, X } from 'lucide-react'
 import * as api from '../lib/api'
 
 interface CrashReportModalProps {
@@ -7,26 +6,13 @@ interface CrashReportModalProps {
   onDone: () => void
 }
 
+// The plug-in reports its own crashes to Hardwave as they happen (message,
+// version, OS and stack, no project data), so this notice only tells the user
+// what happened and where the full log is. It used to upload the log to the
+// company document archive with a key built into the app; a desktop app
+// cannot keep a key secret, so that upload is gone.
 export function CrashReportModal({ report, onDone }: CrashReportModalProps) {
-  const [uploading, setUploading] = useState(false)
-  const [uploaded, setUploaded] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
   const pluginName = report.plugin.charAt(0).toUpperCase() + report.plugin.slice(1)
-
-  const handleUpload = async () => {
-    setUploading(true)
-    setError(null)
-    try {
-      await api.uploadCrashReport()
-      setUploaded(true)
-      setTimeout(onDone, 1500)
-    } catch (err) {
-      setError(typeof err === 'string' ? err : 'Upload failed')
-    } finally {
-      setUploading(false)
-    }
-  }
 
   const handleDismiss = async () => {
     await api.dismissCrashReport().catch(() => {})
@@ -56,48 +42,19 @@ export function CrashReportModal({ report, onDone }: CrashReportModalProps) {
         {/* Body */}
         <div className="px-5 py-4">
           <p className="text-xs text-zinc-400 leading-relaxed mb-4">
-            It looks like the {pluginName} plugin crashed during your last session.
-            Sending the crash report helps us fix the issue faster.
+            The {pluginName} plug-in crashed during your last session. It reported the crash to us
+            by itself, so you do not need to send anything.
           </p>
-          <p className="text-[10px] text-zinc-600 mb-4">
-            The report contains technical details about the crash (stack trace, plugin version, OS).
-            No personal data or project files are included.
+          <p className="text-[10px] text-zinc-600 mb-4 break-all">
+            If it keeps happening, write to support@hardwavestudios.com. The full log is at {report.logPath}
           </p>
 
-          {error && (
-            <div className="flex items-center gap-2 px-3 py-2 mb-3 rounded-lg bg-red-500/[0.08] border border-red-500/20">
-              <AlertTriangle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
-              <span className="text-[11px] text-red-300">{error}</span>
-            </div>
-          )}
-
-          {uploaded ? (
-            <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-emerald-500/[0.08] border border-emerald-500/20">
-              <CheckCircle className="w-4 h-4 text-emerald-400" />
-              <span className="text-xs text-emerald-300 font-medium">Report sent. Thank you!</span>
-            </div>
-          ) : (
-            <div className="flex gap-2">
-              <button
-                onClick={handleUpload}
-                disabled={uploading}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-red-700 to-red-500 hover:from-red-600 hover:to-red-400 text-white text-xs font-semibold rounded-lg transition-all disabled:opacity-50"
-              >
-                {uploading ? (
-                  <><Loader2 className="w-3.5 h-3.5 animate-spin" />Sending...</>
-                ) : (
-                  <><Upload className="w-3.5 h-3.5" />Send Crash Report</>
-                )}
-              </button>
-              <button
-                onClick={handleDismiss}
-                disabled={uploading}
-                className="px-4 py-2.5 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-zinc-400 text-xs rounded-lg transition-colors disabled:opacity-50"
-              >
-                Dismiss
-              </button>
-            </div>
-          )}
+          <button
+            onClick={handleDismiss}
+            className="w-full px-4 py-2.5 bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-zinc-300 text-xs font-semibold rounded-lg transition-colors"
+          >
+            OK
+          </button>
         </div>
       </div>
     </div>

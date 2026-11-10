@@ -1,0 +1,54 @@
+name: Checks
+
+# Runs on every pull request and every push to main.
+# - Secrets in the whole git history (gitleaks, the same pinned build and
+#   hash as the DAW's Secure Code Check). Reviewed historic findings are
+#   listed in .gitleaksignore; anything new fails.
+# - The Rust tests of the app, including the check that no shared key is
+#   compiled into it.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: Secrets in history (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch gitleaks, checked against its published hash
+        run: >-
+          curl -sSLo gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          && echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tgz" | sha256sum -c -
+          && tar xzf gitleaks.tgz gitleaks
+      - name: Scan every commit
+        run: ./gitleaks git --redact --no-banner --exit-code 1 .
+
+  rust-tests:
+    name: Rust tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            patchelf libglib2.0-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+      - name: Test
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
