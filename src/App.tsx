@@ -43,6 +43,9 @@ export default function App() {
     error: null,
   })
   const initRan = useRef(false)
+  const initDone = useRef(false)
+  // The account on screen, for handlers that run outside a render.
+  const userRef = useRef<api.User | null>(null)
 
   // Shell-level UI state
   const [appVersion, setAppVersion] = useState('')
@@ -51,47 +54,84 @@ export default function App() {
   const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null)
   const [userTheme, setUserTheme] = useState<UserTheme | null>(null)
 
+  /** Shows `next` as the account; what was loaded for another account goes. */
+  const showAccount = useCallback((next: api.User | null) => {
+    if (next?.id !== userRef.current?.id) {
+      setPreloadedProducts(null)
+      setPreloadedVersions(null)
+      if (next && !localStorage.getItem('hw_onboarding_done')) setShowOnboarding(true)
+    }
+    userRef.current = next
+    setUser(next)
+  }, [])
+
+  /**
+   * Shows what the backend found in the sign-in every Hardwave program shares.
+   * Returns whether an account is shown afterwards.
+   */
+  const applySession = useCallback((s: api.Session): boolean => {
+    if (s.state === 'signedIn') {
+      api.saveSession(s.token, s.user)
+      showAccount(s.user)
+    } else if (s.state === 'signedOut') {
+      api.clearSession()
+      showAccount(null)
+    } else if (s.state === 'unconfirmed') {
+      // Offline: the site could not say whose sign-in this is. Show the account
+      // this Suite last saw when the sign-in names it, else ask for a sign-in.
+      const saved = api.loadSession()?.user ?? null
+      const shown = userRef.current
+      const known = shown?.id === s.userId ? shown : saved?.id === s.userId ? saved : null
+      if (known) api.saveSession(s.token, known)
+      else api.clearSession()
+      showAccount(known)
+    }
+    return userRef.current !== null
+  }, [showAccount])
+
   useEffect(() => {
     if (initRan.current) return
     initRan.current = true
 
-    const init = async () => {
+    // A Suite app from before sync_session (this window is served from the site and
+    // can be newer than the app): restore the saved session the way it did.
+    const restoreSaved = async (): Promise<boolean> => {
       const saved = api.loadSession()
-      let authenticated = false
-
-      if (saved) {
+      if (!saved) return false
+      try {
+        let token: string | null
         try {
-          let token: string | null
-          try {
-            // Renews a still-valid token, or picks up a newer one a plug-in renewed.
-            token = await api.restoreSession(saved.token)
-          } catch (e) {
-            if (!api.isMissingCommand(e, 'restore_session')) throw e
-            // An older Suite binary: check the saved token as before.
-            await api.setToken(saved.token)
-            token = saved.token
-          }
-          if (token && token !== saved.token) api.saveSession(token, saved.user)
-          const valid = token !== null && (await api.getAuthStatus())
-          if (valid) {
-            setUser(saved.user)
-            authenticated = true
-            if (!localStorage.getItem('hw_onboarding_done')) {
-              setShowOnboarding(true)
-            }
-          } else {
-            // Sign in again. Only signing out deletes the plug-ins' shared token,
-            // so an expired session ends in the Suite alone.
-            api.clearSession()
-            try { await api.clearToken() } catch { /* older binary */ }
-          }
-        } catch {
-          setUser(saved.user)
-          authenticated = true
-          if (!localStorage.getItem('hw_onboarding_done')) {
-            setShowOnboarding(true)
-          }
+          // Renews a still-valid token, or picks up a newer one a plug-in renewed.
+          token = await api.restoreSession(saved.token)
+        } catch (e) {
+          if (!api.isMissingCommand(e, 'restore_session')) throw e
+          // An older Suite binary: check the saved token as before.
+          await api.setToken(saved.token)
+          token = saved.token
         }
+        if (token && token !== saved.token) api.saveSession(token, saved.user)
+        const valid = token !== null && (await api.getAuthStatus())
+        if (valid) {
+          showAccount(saved.user)
+          return true
+        }
+        // Sign in again. Only signing out deletes the plug-ins' shared token,
+        // so an expired session ends in the Suite alone.
+        api.clearSession()
+        try { await api.clearToken() } catch { /* older binary */ }
+        return false
+      } catch {
+        showAccount(saved.user)
+        return true
+      }
+    }
+
+    const init = async () => {
+      let authenticated: boolean
+      try {
+        authenticated = applySession(await api.syncSession())
+      } catch {
+        authenticated = await restoreSaved()
       }
 
       if (authenticated) {
@@ -107,12 +147,39 @@ export default function App() {
         }
       }
 
+      initDone.current = true
       setDataReady(true)
       checkForUpdates()
       api.checkCrashReport().then((r) => { if (r) setCrashReport(r) }).catch(() => {})
     }
     init()
-  }, [])
+  }, [applySession, showAccount])
+
+  // A sign-in or sign-out in the DAW or a plug-in shows here when the window comes
+  // back to the front, and the backend's background check (every 10 minutes)
+  // reports one while the window stays behind.
+  useEffect(() => {
+    let checking = false
+    const onFocus = () => {
+      if (checking || !initDone.current) return
+      checking = true
+      api.syncSession()
+        .then(applySession)
+        .catch(() => { /* an older Suite app: keep what is shown */ })
+        .finally(() => { checking = false })
+    }
+    window.addEventListener('focus', onFocus)
+    let unlisten: (() => void) | undefined
+    let gone = false
+    api.onSessionChanged((s) => { applySession(s) })
+      .then((u) => { if (gone) u(); else unlisten = u })
+      .catch(() => {})
+    return () => {
+      gone = true
+      window.removeEventListener('focus', onFocus)
+      unlisten?.()
+    }
+  }, [applySession])
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => {})
@@ -229,10 +296,7 @@ export default function App() {
       if (rememberMe) {
         api.saveSession(res.token, res.user)
       }
-      if (!localStorage.getItem('hw_onboarding_done')) {
-        setShowOnboarding(true)
-      }
-      setUser(res.user)
+      showAccount(res.user)
     } else {
       throw new Error(res.error ?? 'Login failed')
     }
@@ -246,8 +310,8 @@ export default function App() {
   const handleLogout = useCallback(async () => {
     try { await api.logout() } catch { /* ignore */ }
     api.clearSession()
-    setUser(null)
-  }, [])
+    showAccount(null)
+  }, [showAccount])
 
   const handleSplashFinished = useCallback(() => {
     setShowSplash(false)
@@ -275,6 +339,7 @@ export default function App() {
       </div>
 
       <Shell
+        key={user.id}
         user={user}
         subscription={subscription}
         appVersion={appVersion}
