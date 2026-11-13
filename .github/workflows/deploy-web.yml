@@ -5,13 +5,18 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
 
@@ -22,11 +27,20 @@ jobs:
         run: npm run build
 
       - name: Deploy to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: 178.104.2.34
-          username: root
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          source: dist/*
-          target: /var/www/hardwave-app
-          strip_components: 1
+        env:
+          DEPLOY_SSH_KEY_HQ: ${{ secrets.DEPLOY_SSH_KEY_HQ }}
+        run: |
+          set -euo pipefail
+          # DEPLOY_SSH_KEY_HQ is restricted on 178.104.2.34 to rsync uploads into
+          # /var/www/hardwave-app (rrsync -wo -no-del, since 2026-11-13): no shell, no reads,
+          # no deletes. Remote paths are relative to that folder, so dist/ goes to "./".
+          # The host key is pinned instead of trusted on first use, and the private key only
+          # lives in this job's temp folder for this step.
+          KEY="$RUNNER_TEMP/deploy_key"
+          KNOWN="$RUNNER_TEMP/deploy_known_hosts"
+          trap 'rm -f "$KEY" "$KNOWN"' EXIT
+          (umask 077 && echo "$DEPLOY_SSH_KEY_HQ" > "$KEY")
+          echo "178.104.2.34 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBX5Cal1o9HOuhhlLIsiLdNeq4MxWCk234cjtMB2CFoo" > "$KNOWN"
+          RSH="ssh -i $KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN"
+
+          rsync -rt -e "$RSH" dist/ root@178.104.2.34:./

@@ -8,11 +8,14 @@ on:
   # attached to the run as artefacts instead.
   workflow_dispatch:
 
+# Least privilege: the two jobs that write to the GitHub release ask for it themselves.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -29,13 +32,13 @@ jobs:
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
         with:
           targets: ${{ matrix.target }}
 
@@ -175,7 +178,7 @@ jobs:
 
       - name: Upload Windows artifacts
         if: startsWith(github.ref, 'refs/tags/') && (matrix.platform == 'windows-latest')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           draft: false
           files: |
@@ -224,7 +227,7 @@ jobs:
 
       - name: Upload macOS artifacts
         if: startsWith(github.ref, 'refs/tags/') && (matrix.platform == 'macos-latest')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           draft: false
           files: |
@@ -234,7 +237,7 @@ jobs:
 
       - name: Upload Linux artifacts
         if: startsWith(github.ref, 'refs/tags/') && (matrix.platform == 'ubuntu-22.04')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           draft: false
           files: |
@@ -244,7 +247,7 @@ jobs:
 
       - name: Upload bundles for manual test runs
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: suite-test-${{ matrix.platform }}${{ matrix.target && format('-{0}', matrix.target) || '' }}
           # HardwaveSuite-Setup.exe is what people download and what uninstalls the Suite, so a test
@@ -265,8 +268,10 @@ jobs:
     # A manual run has no tag, so there is no release to attach an updater
     # manifest to. Publishing here would point live installs at nothing.
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Download release assets
         env:
@@ -361,26 +366,22 @@ jobs:
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
         run: |
-          # Set up SSH
-          mkdir -p ~/.ssh
-          echo "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H 46.225.219.184 >> ~/.ssh/known_hosts 2>/dev/null
+          set -euo pipefail
+          # DEPLOY_SSH_KEY is restricted on 46.225.219.184 to rsync uploads into
+          # /opt/hardwave/public-downloads (rrsync -wo -no-del, since 2026-11-13): no shell,
+          # no reads, no deletes. Remote paths are relative to that folder.
+          # The host key is pinned instead of trusted on first use, and the private key only
+          # lives in this job's temp folder for this step.
+          KEY="$RUNNER_TEMP/deploy_key"
+          KNOWN="$RUNNER_TEMP/deploy_known_hosts"
+          trap 'rm -f "$KEY" "$KNOWN"' EXIT
+          (umask 077 && echo "$DEPLOY_SSH_KEY" > "$KEY")
+          echo "46.225.219.184 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMFzDuknOGOhcjwG+HIaEJvDE53zB+dnVx42gENBLOsm" > "$KNOWN"
+          RSH="ssh -i $KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN"
 
-          REMOTE="root@46.225.219.184"
-          SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
-          SCP="scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
-
-          # Create release directory on server
-          $SSH $REMOTE "mkdir -p /opt/hardwave/public-downloads/suite-releases"
-
-          # Upload binaries (only updater-relevant files: .exe, .app.tar.gz, .AppImage + sigs)
-          $SCP /tmp/release-assets/* $REMOTE:/opt/hardwave/public-downloads/suite-releases/
-
-          # Upload manifest
-          $SCP /tmp/latest.json $REMOTE:/opt/hardwave/public-downloads/hardwave-suite-latest.json
+          # Binaries and signatures first, the manifest last, so an installed Suite never reads
+          # a manifest that points at files that are not there yet.
+          rsync -rt -e "$RSH" /tmp/release-assets/ root@46.225.219.184:suite-releases/
+          rsync -t -e "$RSH" /tmp/latest.json root@46.225.219.184:hardwave-suite-latest.json
 
           echo "Deployed to hardwavestudios.com"
-
-          # Clean up
-          rm -f ~/.ssh/deploy_key
