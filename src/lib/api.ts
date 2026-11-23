@@ -83,6 +83,34 @@ export async function clearToken(): Promise<void> {
   return invoke('clear_token')
 }
 
+/**
+ * Where the sign-in stands. The Suite, the DAW and the plug-ins share one sign-in
+ * (one token file on this computer); the backend follows it, so a sign-in or
+ * sign-out in any of them shows here.
+ * - signedIn: the site just confirmed the token; show `user`.
+ * - signedOut: nobody is signed in, or the site refused the sign-in.
+ * - unconfirmed: offline, the site could not say whose sign-in it is; `userId` is
+ *   the account it names.
+ * - unchanged: nothing changed since the last check.
+ */
+export type Session =
+  | { state: 'signedIn'; token: string; user: User }
+  | { state: 'signedOut' }
+  | { state: 'unconfirmed'; token: string; userId: number | null }
+  | { state: 'unchanged' }
+
+/** Asks the backend to follow the shared sign-in now (on start, and when the window comes to the front). */
+export async function syncSession(): Promise<Session> {
+  return invoke<Session>('sync_session')
+}
+
+/** Fires when the backend's background check found the shared sign-in changed. */
+export async function onSessionChanged(callback: (session: Session) => void): Promise<() => void> {
+  if (!isTauri) return () => {}
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<Session>('auth:changed', (e) => callback(e.payload))
+}
+
 /** True when the running Suite binary predates `cmd` (the page is served newer than the app). */
 export function isMissingCommand(e: unknown, cmd: string): boolean {
   const msg = String(e)
