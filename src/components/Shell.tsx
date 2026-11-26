@@ -11,6 +11,8 @@ import type { Product, SubscriptionInfo, User } from '../lib/api'
 interface Props {
   user: User
   subscription: SubscriptionInfo | null
+  /** Beta builds is switched on in Settings. */
+  betaChannel: boolean
   appVersion: string
   preloadedProducts: Product[] | null
   preloadedVersions: Record<string, string> | null
@@ -26,9 +28,10 @@ interface Props {
  * The library (products, what is installed, downloads) lives here once, so
  * Home and Plug-ins never disagree.
  */
-export function Shell({ user, subscription, appVersion, preloadedProducts, preloadedVersions, onOpenSettings, onSignOut, onSettingsChanged }: Props) {
+export function Shell({ user, subscription, betaChannel, appVersion, preloadedProducts, preloadedVersions, onOpenSettings, onSignOut, onSettingsChanged }: Props) {
   const [view, setView] = useState<SidebarView>('home')
-  const lib = useLibrary(preloadedProducts, preloadedVersions)
+  // Beta builds reach an account that may have them, and only with the switch on.
+  const lib = useLibrary(preloadedProducts, preloadedVersions, betaChannel && !!subscription?.betaEligible)
   const pro = !!subscription?.hasSubscription
   const planLabel = pro ? (subscription?.planName || 'Hardwave Pro').toUpperCase() : 'FREE'
 

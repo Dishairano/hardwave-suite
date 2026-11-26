@@ -1,26 +1,15 @@
 import type { Product } from '../lib/api'
 import type { TileState } from '../lib/library'
+import { describe } from '../lib/channel'
 import { tileArt, shortName } from '../lib/tiles'
 
 interface Props {
   product: Product
   state: TileState
+  /** Installs the newest version: a beta build when one is on offer. */
   onInstall: () => void
-}
-
-/** The words and the dot colour for a tile's state. */
-export function describe(s: TileState): { text: string; dot: string } {
-  switch (s.kind) {
-    case 'downloading': return { text: `Downloading · ${Math.round(s.percent ?? 0)}%`, dot: 'var(--warning)' }
-    case 'installing': return { text: 'Installing…', dot: 'var(--warning)' }
-    case 'error': return { text: s.error || 'Something went wrong', dot: 'var(--danger)' }
-    case 'update': return { text: `Update ready · ${s.latest}`, dot: 'var(--brand)' }
-    case 'never_opened': return { text: `Not opened yet · ${s.installed}`, dot: 'var(--warning)' }
-    case 'installed': return { text: `Up to date · ${s.installed}`, dot: 'var(--success)' }
-    case 'not_installed':
-    default:
-      return s.pro ? { text: `Beta · ${s.latest}`, dot: 'var(--accent)' } : { text: `Not installed · ${s.latest}`, dot: 'var(--text-dim)' }
-  }
+  /** Puts the stable version back over a beta build. */
+  onStable: () => void
 }
 
 /**
@@ -31,8 +20,12 @@ export function describe(s: TileState): { text: string; dot: string } {
  * returns the plug-ins this account may have (Pro, or bought on its own). A
  * "With Pro" lock here turned away people who had bought a beta plug-in
  * without Pro (2026-10-19).
+ *
+ * With Beta builds on, the newest version can be a release candidate: the
+ * tile then says Beta and the same button installs it. A beta build on this
+ * PC keeps a Back to stable button, also after the switch is turned off.
  */
-export function PlugTile({ product, state, onInstall }: Props) {
+export function PlugTile({ product, state, onInstall, onStable }: Props) {
   const art = tileArt(product.slug)
   const d = describe(state)
   const busy = state.kind === 'downloading' || state.kind === 'installing'
@@ -41,6 +34,8 @@ export function PlugTile({ product, state, onInstall }: Props) {
   else if (state.kind === 'update') action = <button type="button" className="a2-btn red sm" onClick={onInstall}>Update</button>
   else if (state.kind === 'not_installed' || state.kind === 'error') {
     action = <button type="button" className="a2-btn ghost sm" onClick={onInstall}>{state.kind === 'error' ? 'Try again' : 'Install'}</button>
+  } else if (state.canGoStable) {
+    action = <button type="button" className="a2-btn ghost sm" onClick={onStable}>Back to stable</button>
   }
   return (
     <div className="pc" data-slug={product.slug}>

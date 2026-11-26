@@ -6,6 +6,10 @@ name: Checks
 #   listed in .gitleaksignore; anything new fails.
 # - The Rust tests of the app, including the check that no shared key is
 #   compiled into it.
+# - The window: type check and the tests of the plug-in library, including
+#   what the beta channel offers and installs. The window is served from
+#   suite.hardwavestudios.com, so a merge to main reaches every installed
+#   Suite; this is the check that runs before that.
 
 on:
   pull_request:
@@ -32,6 +36,23 @@ jobs:
           && tar xzf gitleaks.tgz gitleaks
       - name: Scan every commit
         run: ./gitleaks git --redact --no-banner --exit-code 1 .
+
+  window-tests:
+    name: Window tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Test
+        run: npm test
 
   rust-tests:
     name: Rust tests

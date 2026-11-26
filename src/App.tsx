@@ -47,7 +47,7 @@ export default function App() {
   // Shell-level UI state
   const [appVersion, setAppVersion] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [, setUpdateChannel] = useState<UpdateChannel>('stable')
+  const [updateChannel, setUpdateChannel] = useState<UpdateChannel>('stable')
   const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null)
   const [userTheme, setUserTheme] = useState<UserTheme | null>(null)
 
@@ -277,6 +277,7 @@ export default function App() {
       <Shell
         user={user}
         subscription={subscription}
+        betaChannel={updateChannel === 'beta'}
         appVersion={appVersion}
         preloadedProducts={preloadedProducts}
         preloadedVersions={preloadedVersions}

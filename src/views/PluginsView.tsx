@@ -35,13 +35,14 @@ export function PluginsView({ lib }: Props) {
     switch (filter) {
       case 'installed': return lib.products.filter((p) => !!lib.installedVersions[p.slug])
       case 'updates': return lib.updatable
-      case 'beta': return lib.products.filter((p) => lib.stateOf(p).pro)
+      case 'beta': return lib.products.filter((p) => { const s = lib.stateOf(p); return s.pro || s.beta || s.canGoStable })
       default: return lib.products
     }
   }, [filter, lib])
 
   const firstUpdate = lib.updatable[0] ?? null
-  const changed = bullets(firstUpdate?.changelog ?? null)
+  const firstLatest = firstUpdate ? lib.latestOf(firstUpdate) : null
+  const changed = bullets(firstLatest?.changelog ?? null)
 
   if (lib.loading) {
     return <div className="a2-main"><div className="loading-state"><p>Loading your library…</p></div></div>
@@ -98,19 +99,27 @@ export function PluginsView({ lib }: Props) {
         )
       })()}
 
+      {lib.betaError && (
+        <div className="a2-card warn">
+          <div className="k">Beta builds could not be read</div>
+          <p>The stable versions are shown for now. {lib.betaError}</p>
+          <div className="row"><button type="button" className="a2-btn ghost sm" onClick={lib.reload}>Retry</button></div>
+        </div>
+      )}
+
       {list.length === 0 ? (
         <div className="a2-card"><div className="k">Nothing here</div><p>{filter === 'updates' ? 'Everything on this PC is up to date.' : filter === 'installed' ? 'No plug-in is installed on this PC yet.' : 'Your plug-ins appear here once your account has them.'}</p></div>
       ) : (
         <div className="shelf six">
           {list.map((p) => (
-            <PlugTile key={p.id} product={p} state={lib.stateOf(p)} onInstall={() => lib.install(p)} />
+            <PlugTile key={p.id} product={p} state={lib.stateOf(p)} onInstall={() => lib.install(p)} onStable={() => lib.installStable(p)} />
           ))}
         </div>
       )}
 
       <div className="det">
         <div className="a2-card">
-          <div className="k">{firstUpdate ? `${shortName(firstUpdate.name)} ${firstUpdate.version} · what changed` : 'What changed'}</div>
+          <div className="k">{firstUpdate && firstLatest ? `${shortName(firstUpdate.name)} ${firstLatest.version} · what changed` : 'What changed'}</div>
           {firstUpdate && changed.length > 0
             ? <ul>{changed.map((c, i) => <li key={i}>{c}</li>)}</ul>
             : <p>{firstUpdate ? 'The notes for this version are on the site.' : 'When an update is ready, its notes appear here.'}</p>}
