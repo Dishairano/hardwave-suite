@@ -116,6 +116,39 @@ describe('useLibrary with Beta builds on', () => {
     expect(result.current.installedVersions.wideboi).toBe('0.4.9')
   })
 
+  it('Try again after a failed Back to stable installs the stable build, not the beta', async () => {
+    mocked.downloadAndInstall.mockRejectedValueOnce('Failed to copy: os error 32')
+    const { result } = renderHook(() => useLibrary([wideboi], { wideboi: '0.5.0-rc1' }, true))
+    await waitFor(() => expect(result.current.stateOf(wideboi).canGoStable).toBe(true))
+    await act(async () => { await result.current.installStable(wideboi) })
+    expect(result.current.stateOf(wideboi)).toMatchObject({ kind: 'error', error: 'The plug-in is in use. Close your DAW and try again.' })
+    await act(async () => { await result.current.retry(wideboi) })
+    expect(mocked.installBetaBuild).not.toHaveBeenCalled()
+    expect(mocked.downloadAndInstall).toHaveBeenCalledTimes(2)
+    expect(result.current.installedVersions.wideboi).toBe('0.4.9')
+  })
+
+  it('Try again after a failed beta install installs the beta build again', async () => {
+    mocked.installBetaBuild.mockRejectedValueOnce('Beta download failed: HTTP 502')
+    const { result } = renderHook(() => useLibrary([wideboi], { wideboi: '0.4.9' }, true))
+    await waitFor(() => expect(result.current.stateOf(wideboi).kind).toBe('update'))
+    await act(async () => { await result.current.install(wideboi) })
+    expect(result.current.stateOf(wideboi).kind).toBe('error')
+    await act(async () => { await result.current.retry(wideboi) })
+    expect(mocked.installBetaBuild).toHaveBeenCalledTimes(2)
+    expect(mocked.downloadAndInstall).not.toHaveBeenCalled()
+    expect(result.current.installedVersions.wideboi).toBe('0.5.0-rc1')
+  })
+
+  it('counts a released plug-in with a beta build under Pro beta', async () => {
+    const analyser: Product = { ...wideboi, id: 1, name: 'Hardwave Analyser', slug: 'analyser', version: '1.0.35' }
+    mocked.getBetaManifest.mockResolvedValue([{ ...rc1, id: 72, pluginSlug: 'analyser', version: '1.0.36-rc1' }])
+    const { result, rerender } = renderHook(({ beta }) => useLibrary([analyser], { analyser: '1.0.35' }, beta), { initialProps: { beta: true } })
+    await waitFor(() => expect(result.current.counts.beta).toBe(1))
+    rerender({ beta: false })
+    await waitFor(() => expect(result.current.counts.beta).toBe(0))
+  })
+
   it('shows a failed beta install on the tile and leaves the installed version alone', async () => {
     mocked.installBetaBuild.mockRejectedValue('Beta artefact sha256 mismatch')
     const { result } = renderHook(() => useLibrary([wideboi], { wideboi: '0.4.9' }, true))

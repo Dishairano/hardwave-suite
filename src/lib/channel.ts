@@ -32,6 +32,8 @@ export function betaOffers(manifest: BetaPlugin[], now: number): Record<string, 
     if (!b || !b.pluginSlug || !b.version || b.availableHere !== true) continue
     if (!b.artefactUrl || !b.artefactSha256) continue
     if (hoursLeft(b, now) <= 0) continue
+    // A version that cannot be read can never be compared, so it must not take the slot of one that can.
+    if (compareVersions(b.version, b.version) === null) continue
     const have = best[b.pluginSlug]
     if (!have || compareVersions(b.version, have.version) === 1) best[b.pluginSlug] = b
   }
@@ -138,6 +140,15 @@ export function tileState(i: TileInput): TileState {
   const canGoStable = !!i.stable && i.hasStableDownload && compareVersions(i.installed, i.stable) === 1
   if (i.neverOpened) return { ...base, canGoStable, kind: 'never_opened' }
   return { ...base, canGoStable, kind: 'installed' }
+}
+
+/**
+ * The plug-in counts as beta: a 0.x plug-in, one whose newest version is a
+ * beta build, or one with a beta build on this PC. The Pro beta filter and
+ * its count both use this.
+ */
+export function inBeta(s: TileState): boolean {
+  return s.pro || s.beta || s.canGoStable
 }
 
 /** The words and the dot colour for a tile's state. */

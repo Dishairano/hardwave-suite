@@ -10,6 +10,8 @@ interface Props {
   onInstall: () => void
   /** Puts the stable version back over a beta build. */
   onStable: () => void
+  /** Runs the install that failed again. */
+  onRetry: () => void
 }
 
 /**
@@ -25,16 +27,16 @@ interface Props {
  * tile then says Beta and the same button installs it. A beta build on this
  * PC keeps a Back to stable button, also after the switch is turned off.
  */
-export function PlugTile({ product, state, onInstall, onStable }: Props) {
+export function PlugTile({ product, state, onInstall, onStable, onRetry }: Props) {
   const art = tileArt(product.slug)
   const d = describe(state)
   const busy = state.kind === 'downloading' || state.kind === 'installing'
   let action: JSX.Element | null = null
   if (busy) action = null
   else if (state.kind === 'update') action = <button type="button" className="a2-btn red sm" onClick={onInstall}>Update</button>
-  else if (state.kind === 'not_installed' || state.kind === 'error') {
-    action = <button type="button" className="a2-btn ghost sm" onClick={onInstall}>{state.kind === 'error' ? 'Try again' : 'Install'}</button>
-  } else if (state.canGoStable) {
+  else if (state.kind === 'error') action = <button type="button" className="a2-btn ghost sm" onClick={onRetry}>Try again</button>
+  else if (state.kind === 'not_installed') action = <button type="button" className="a2-btn ghost sm" onClick={onInstall}>Install</button>
+  else if (state.canGoStable) {
     action = <button type="button" className="a2-btn ghost sm" onClick={onStable}>Back to stable</button>
   }
   return (

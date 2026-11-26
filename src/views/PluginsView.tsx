@@ -3,6 +3,7 @@ import { AlertCircle, RefreshCw } from 'lucide-react'
 import * as api from '../lib/api'
 import type { Library } from '../lib/library'
 import { PlugTile } from '../components/PlugTile'
+import { inBeta } from '../lib/channel'
 import { shortName } from '../lib/tiles'
 
 type Filter = 'all' | 'installed' | 'updates' | 'beta'
@@ -35,7 +36,7 @@ export function PluginsView({ lib }: Props) {
     switch (filter) {
       case 'installed': return lib.products.filter((p) => !!lib.installedVersions[p.slug])
       case 'updates': return lib.updatable
-      case 'beta': return lib.products.filter((p) => { const s = lib.stateOf(p); return s.pro || s.beta || s.canGoStable })
+      case 'beta': return lib.products.filter((p) => inBeta(lib.stateOf(p)))
       default: return lib.products
     }
   }, [filter, lib])
@@ -102,7 +103,7 @@ export function PluginsView({ lib }: Props) {
       {lib.betaError && (
         <div className="a2-card warn">
           <div className="k">Beta builds could not be read</div>
-          <p>The stable versions are shown for now. {lib.betaError}</p>
+          <p>The list of beta builds may be out of date; stable versions install as usual. {lib.betaError}</p>
           <div className="row"><button type="button" className="a2-btn ghost sm" onClick={lib.reload}>Retry</button></div>
         </div>
       )}
@@ -112,7 +113,7 @@ export function PluginsView({ lib }: Props) {
       ) : (
         <div className="shelf six">
           {list.map((p) => (
-            <PlugTile key={p.id} product={p} state={lib.stateOf(p)} onInstall={() => lib.install(p)} onStable={() => lib.installStable(p)} />
+            <PlugTile key={p.id} product={p} state={lib.stateOf(p)} onInstall={() => lib.install(p)} onStable={() => lib.installStable(p)} onRetry={() => lib.retry(p)} />
           ))}
         </div>
       )}

@@ -1,6 +1,6 @@
 import { describe as suite, expect, it } from 'vitest'
 import type { BetaPlugin, Product } from '../api'
-import { betaOffers, betaOnlyProducts, describe, hoursLeft, installErrorText, latestOf, offerFor, tileState } from '../channel'
+import { betaOffers, betaOnlyProducts, describe, hoursLeft, inBeta, installErrorText, latestOf, offerFor, tileState } from '../channel'
 import type { TileInput } from '../channel'
 
 const NOW = Date.parse('2026-11-26T12:00:00Z')
@@ -87,6 +87,13 @@ suite('betaOffers', () => {
     const rc10 = build({ id: 3, version: '0.5.0-rc10' })
     expect(betaOffers([rc2, rc10, rc1], NOW).wideboi.version).toBe('0.5.0-rc10')
     expect(betaOffers([rc1, rc2], NOW).wideboi.version).toBe('0.5.0-rc2')
+  })
+
+  it('does not let a version it cannot read take the place of one it can', () => {
+    const odd = build({ id: 1, version: 'nightly' })
+    expect(betaOffers([odd, build()], NOW).wideboi.version).toBe('0.5.0-rc1')
+    expect(betaOffers([build(), odd], NOW).wideboi.version).toBe('0.5.0-rc1')
+    expect(betaOffers([odd], NOW)).toEqual({})
   })
 
   it('falls back to the server count when the expiry date cannot be read', () => {
@@ -218,6 +225,27 @@ suite('tileState', () => {
 
   it('reads a finished download as the installed state', () => {
     expect(tileState(input({ latest: beta, installed: '0.5.0-rc1', download: { status: 'installed', percent: 100 } })).kind).toBe('installed')
+  })
+})
+
+suite('inBeta', () => {
+  const offers = betaOffers([build({ pluginSlug: 'analyser', version: '1.0.36-rc1' })], NOW)
+  const analyser = product({ slug: 'analyser', version: '1.0.35' })
+
+  it('counts a 0.x plug-in, as before', () => {
+    expect(inBeta(tileState(input({ pro: true, installed: '0.4.9' })))).toBe(true)
+  })
+
+  it('counts a released plug-in whose newest version is a beta build', () => {
+    expect(inBeta(tileState(input({ pro: false, stable: '1.0.35', latest: latestOf(analyser, offers), installed: '1.0.35' })))).toBe(true)
+  })
+
+  it('counts a released plug-in with a beta build on this PC', () => {
+    expect(inBeta(tileState(input({ pro: false, stable: '1.0.35', latest: latestOf(analyser, {}), installed: '1.0.36-rc1' })))).toBe(true)
+  })
+
+  it('leaves out a released plug-in on its stable version', () => {
+    expect(inBeta(tileState(input({ pro: false, stable: '1.0.35', latest: latestOf(analyser, {}), installed: '1.0.35' })))).toBe(false)
   })
 })
 

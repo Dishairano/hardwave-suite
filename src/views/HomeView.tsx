@@ -106,7 +106,7 @@ export function HomeView({ lib, pro, go }: Props) {
         ) : (
           <div className="shelf">
             {installed.slice(0, 3).map((p) => (
-              <PlugTile key={p.id} product={p} state={lib.stateOf(p)} onInstall={() => lib.install(p)} onStable={() => lib.installStable(p)} />
+              <PlugTile key={p.id} product={p} state={lib.stateOf(p)} onInstall={() => lib.install(p)} onStable={() => lib.installStable(p)} onRetry={() => lib.retry(p)} />
             ))}
           </div>
         )}
