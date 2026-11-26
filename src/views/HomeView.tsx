@@ -69,7 +69,7 @@ export function HomeView({ lib, pro, go }: Props) {
         <span><b>{statusText.split('. ')[0]}.</b> {statusText.split('. ').slice(1).join('. ')}</span>
         <span className="sp" />
         {updates.length === 1 && (
-          <button type="button" className="lnk" onClick={() => lib.install(updates[0])}>Update {shortName(updates[0].name)} to {updates[0].version}</button>
+          <button type="button" className="lnk" onClick={() => lib.install(updates[0])}>Update {shortName(updates[0].name)} to {lib.latestOf(updates[0]).version}</button>
         )}
         {updates.length > 1 && (
           <button type="button" className="lnk" onClick={lib.updateAll}>Update all</button>
@@ -106,7 +106,7 @@ export function HomeView({ lib, pro, go }: Props) {
         ) : (
           <div className="shelf">
             {installed.slice(0, 3).map((p) => (
-              <PlugTile key={p.id} product={p} state={lib.stateOf(p)} onInstall={() => lib.install(p)} />
+              <PlugTile key={p.id} product={p} state={lib.stateOf(p)} onInstall={() => lib.install(p)} onStable={() => lib.installStable(p)} onRetry={() => lib.retry(p)} />
             ))}
           </div>
         )}

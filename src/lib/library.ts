@@ -1,13 +1,21 @@
-import { useCallback, useEffect, useMemo, useReducer, useState } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import * as api from './api'
-import type { Product } from './api'
+import type { BetaPlugin, Product } from './api'
 import { isBetaProduct } from './beta'
+import { betaOffers, betaOnlyProducts, inBeta, installErrorText, latestOf as latestFor, tileState } from './channel'
+import type { Latest, TileState } from './channel'
 import { isNewerVersion } from './version'
+
+export type { Latest, TileState } from './channel'
 
 /**
  * The plug-in library: what the account owns, what is on this PC, what is
  * downloading, and whether an installed plug-in has ever been opened. One
  * hook, shared by Home and Plug-ins, so both show the same truth.
+ *
+ * With "Beta builds" on it also reads the beta manifest. A release candidate
+ * that is newer than a plug-in's stable version is then that plug-in's newest
+ * version everywhere: on the tile, in the update count, in Update all.
  */
 
 export type Platform = 'windows' | 'mac' | 'linux'
@@ -59,18 +67,6 @@ export interface Counts {
   beta: number
 }
 
-/** What a tile shows for one product. */
-export interface TileState {
-  kind: 'not_installed' | 'installed' | 'update' | 'never_opened' | 'downloading' | 'installing' | 'error'
-  /** The version on this PC, if any. */
-  installed: string | null
-  /** The newest version the account can install. */
-  latest: string
-  percent?: number
-  error?: string
-  pro: boolean
-}
-
 export interface Library {
   products: Product[]
   loading: boolean
@@ -84,7 +80,16 @@ export interface Library {
   counts: Counts
   updatable: Product[]
   stateOf: (p: Product) => TileState
+  /** The newest version this account can install: the stable one, or a newer beta build when Beta builds is on. */
+  latestOf: (p: Product) => Latest
+  /** Installs the newest version: the beta build when one is on offer, the stable build otherwise. */
   install: (p: Product) => Promise<void>
+  /** Replaces a beta build with the stable version. */
+  installStable: (p: Product) => Promise<void>
+  /** Runs the install that failed again: the stable build after a failed Back to stable, the newest version otherwise. */
+  retry: (p: Product) => Promise<void>
+  /** Beta builds is on and the manifest could not be read; builds read earlier stay listed, otherwise stable versions show. */
+  betaError: string | null
   updateAll: () => Promise<void>
   uninstall: (p: Product) => Promise<void>
   cleanupBlocked: { slug: string; blocked: api.BlockedCopy[] } | null
@@ -93,9 +98,15 @@ export interface Library {
   dismissCleanup: () => void
 }
 
-export function useLibrary(preloadedProducts?: Product[] | null, preloadedVersions?: Record<string, string> | null): Library {
+/**
+ * `beta` is true when the Beta builds switch is on and the account may have
+ * beta builds. When it is false the beta manifest is never asked for.
+ */
+export function useLibrary(preloadedProducts?: Product[] | null, preloadedVersions?: Record<string, string> | null, beta = false): Library {
   const hasPreloaded = !!(preloadedProducts && preloadedProducts.length >= 0)
-  const [products, setProducts] = useState<Product[]>(preloadedProducts ?? [])
+  const [owned, setProducts] = useState<Product[]>(preloadedProducts ?? [])
+  const [manifest, setManifest] = useState<BetaPlugin[]>([])
+  const [betaError, setBetaError] = useState<string | null>(null)
   const [loading, setLoading] = useState<boolean>(!hasPreloaded)
   const [error, setError] = useState<string | null>(null)
   const [downloads, dispatch] = useReducer(dlReducer, {})
@@ -105,6 +116,28 @@ export function useLibrary(preloadedProducts?: Product[] | null, preloadedVersio
   const [firstRun, setFirstRun] = useState<api.FirstRunItem[]>([])
   const platform = useMemo(detectPlatform, [])
 
+  // Only the newest request may answer: a manifest that arrives after the
+  // switch went off must not bring the beta builds back.
+  const manifestRequest = useRef(0)
+  const loadManifest = useCallback(async () => {
+    const request = ++manifestRequest.current
+    if (!beta) {
+      setManifest([])
+      setBetaError(null)
+      return
+    }
+    try {
+      const list = await api.getBetaManifest()
+      if (request !== manifestRequest.current) return
+      setManifest(list)
+      setBetaError(null)
+    } catch (err) {
+      if (request !== manifestRequest.current) return
+      // Keep the builds already listed; the stable versions stay installable either way.
+      setBetaError(installErrorText(err))
+    }
+  }, [beta])
+
   const reload = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -112,6 +145,7 @@ export function useLibrary(preloadedProducts?: Product[] | null, preloadedVersio
       const [prods, installed] = await Promise.all([
         api.getProducts(),
         api.getInstalledVersions().catch(() => ({} as Record<string, string>)),
+        loadManifest(),
       ])
       setProducts(prods)
       setInstalledVersions(installed)
@@ -120,12 +154,27 @@ export function useLibrary(preloadedProducts?: Product[] | null, preloadedVersio
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [loadManifest])
 
   useEffect(() => {
     if (!hasPreloaded) void reload()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Read the manifest when Beta builds is switched on, drop it when it is switched off.
+  useEffect(() => { void loadManifest() }, [loadManifest])
+
+  // A build that expired is no longer on offer.
+  useEffect(() => {
+    let un: (() => void) | undefined
+    let gone = false
+    api.onBetaExpired(() => { void loadManifest() }).then((u) => { if (gone) u(); else un = u }).catch(() => {})
+    return () => { gone = true; un?.() }
+  }, [loadManifest])
+
+  const offers = useMemo(() => betaOffers(manifest, Date.now()), [manifest])
+  const products = useMemo(() => [...owned, ...betaOnlyProducts(owned, offers)], [owned, offers])
+  const latestOf = useCallback((p: Product) => latestFor(p, offers), [offers])
 
   // After an install the backend sweeps stale copies from the other plug-in
   // folders. A copy it could not remove (the DAW has it open, or it sits in
@@ -155,25 +204,15 @@ export function useLibrary(preloadedProducts?: Product[] | null, preloadedVersio
 
   const needsAttention = useMemo(() => firstRun.filter((f) => f.notes.length > 0), [firstRun])
 
-  const counts = useMemo<Counts>(() => {
-    const installed = products.filter((p) => !!installedVersions[p.slug]).length
-    const updates = products.filter((p) => {
-      const v = installedVersions[p.slug]
-      return !!v && isNewerVersion(p.version, v)
-    }).length
-    const beta = products.filter(isBetaProduct).length
-    return { total: products.length, installed, updates, beta }
-  }, [products, installedVersions])
-
   const updatable = useMemo(
     () => products.filter((p) => {
       const v = installedVersions[p.slug]
-      return !!v && isNewerVersion(p.version, v)
+      return !!v && isNewerVersion(latestOf(p).version, v)
     }),
-    [products, installedVersions],
+    [products, installedVersions, latestOf],
   )
 
-  const install = useCallback(async (product: Product) => {
+  const installStableBuild = useCallback(async (product: Product) => {
     const url = product.downloads[platform]
     if (!url) return
     const fileId = `${product.id}-${platform}`
@@ -188,16 +227,48 @@ export function useLibrary(preloadedProducts?: Product[] | null, preloadedVersio
       await api.downloadAndInstall(fileId, url, filename, product.category || 'vst', product.name, product.slug, product.version)
       setInstalledVersions((prev) => ({ ...prev, [product.slug]: product.version }))
     } catch (err) {
-      const msg = String(err)
-      if (msg.includes('os error 32') || msg.includes('being used by another process')) {
-        dispatch({ type: 'error', fileId, error: 'The plug-in is in use. Close your DAW and try again.' })
-      } else {
-        dispatch({ type: 'error', fileId, error: msg })
-      }
+      dispatch({ type: 'error', fileId, error: installErrorText(err) })
     } finally {
       unlisten()
     }
   }, [platform])
+
+  // A beta build is checked against its sha256 and then goes through the same
+  // installer as a stable build, into the same folders. The backend sends no
+  // progress for it, so the tile says Installing until it is done.
+  const installBeta = useCallback(async (product: Product, build: BetaPlugin) => {
+    const fileId = `${product.id}-${platform}`
+    dispatch({ type: 'progress', fileId, percent: 0, status: 'installing' })
+    try {
+      const installPath = await api.installBetaBuild(build.pluginSlug, build.version, build.artefactUrl, build.artefactSha256, build.expiresAt)
+      setInstalledVersions((prev) => ({ ...prev, [product.slug]: build.version }))
+      dispatch({ type: 'progress', fileId, percent: 100, status: 'installed', installPath })
+      // The first-run check reads the disk again.
+      window.dispatchEvent(new Event(api.INSTALLED_CHANGED_EVENT))
+    } catch (err) {
+      dispatch({ type: 'error', fileId, error: installErrorText(err) })
+    }
+  }, [platform])
+
+  // Plug-ins whose last install was a Back to stable, so Try again repeats that and not the beta install.
+  const wantsStable = useRef(new Set<string>())
+
+  const install = useCallback(async (product: Product) => {
+    wantsStable.current.delete(product.slug)
+    const build = latestOf(product).beta
+    if (build) await installBeta(product, build)
+    else await installStableBuild(product)
+  }, [latestOf, installBeta, installStableBuild])
+
+  const installStable = useCallback(async (product: Product) => {
+    wantsStable.current.add(product.slug)
+    await installStableBuild(product)
+  }, [installStableBuild])
+
+  const retry = useCallback(async (product: Product) => {
+    if (wantsStable.current.has(product.slug)) await installStable(product)
+    else await install(product)
+  }, [install, installStable])
 
   const updateAll = useCallback(async () => {
     for (const p of updatable) {
@@ -237,22 +308,27 @@ export function useLibrary(preloadedProducts?: Product[] | null, preloadedVersio
   }, [platform])
 
   const stateOf = useCallback((p: Product): TileState => {
-    const installed = installedVersions[p.slug] ?? null
-    const pro = isBetaProduct(p)
-    const dl = downloads[`${p.id}-${platform}`]
-    if (dl && dl.status === 'downloading') return { kind: 'downloading', installed, latest: p.version, percent: dl.percent, pro }
-    if (dl && dl.status === 'installing') return { kind: 'installing', installed, latest: p.version, pro }
-    if (dl && dl.status === 'error') return { kind: 'error', installed, latest: p.version, error: dl.error, pro }
-    if (!installed) return { kind: 'not_installed', installed, latest: p.version, pro }
-    if (isNewerVersion(p.version, installed)) return { kind: 'update', installed, latest: p.version, pro }
     const fr = firstRun.find((f) => f.slug === p.slug)
-    if (fr && fr.can_tell && !fr.last_opened) return { kind: 'never_opened', installed, latest: p.version, pro }
-    return { kind: 'installed', installed, latest: p.version, pro }
-  }, [installedVersions, downloads, platform, firstRun])
+    return tileState({
+      stable: p.version,
+      hasStableDownload: !!p.downloads[platform],
+      latest: latestOf(p),
+      installed: installedVersions[p.slug] ?? null,
+      download: downloads[`${p.id}-${platform}`],
+      pro: isBetaProduct(p),
+      neverOpened: !!fr && fr.can_tell && !fr.last_opened,
+    })
+  }, [installedVersions, downloads, platform, firstRun, latestOf])
+
+  const counts = useMemo<Counts>(() => {
+    const installed = products.filter((p) => !!installedVersions[p.slug]).length
+    const beta = products.filter((p) => inBeta(stateOf(p))).length
+    return { total: products.length, installed, updates: updatable.length, beta }
+  }, [products, installedVersions, updatable, stateOf])
 
   return {
     products, loading, error, reload, installedVersions, platform, firstRun, needsAttention, counts, updatable,
-    stateOf, install, updateAll, uninstall,
+    stateOf, latestOf, install, installStable, retry, betaError, updateAll, uninstall,
     cleanupBlocked, retryingCleanup, retryCleanup, dismissCleanup: () => setCleanupBlocked(null),
   }
 }
